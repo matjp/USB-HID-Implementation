@@ -8,30 +8,30 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v16"
+        default: "v17"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_all_ports_repeat3.c"
+        default: "efi/xhci_mmio_v17.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V16 / ALL PORTSC 3X REPEAT"
+        default: "xHCI V17 / 57 READ PAGINATED"
         type: string
       verify1:
-        description: "First UTF-16 string to require"
+        description: "First string to require"
         required: true
-        default: "xHCI V16"
+        default: "xHCI V17"
         type: string
       verify2:
-        description: "Second UTF-16 string to require"
+        description: "Second string to require"
         required: true
-        default: "MAXPORTS"
+        default: "V17 COMPLETE"
         type: string
       verify3:
-        description: "Third UTF-16 string to require"
+        description: "Third string to require"
         required: true
         default: "NO DMA / NO WRITES"
         type: string
@@ -43,11 +43,11 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v16' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_all_ports_repeat3.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V16 / ALL PORTSC 3X REPEAT' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V16' }}
-      VERIFY2: ${{ inputs.verify2 || 'MAXPORTS' }}
+      TEST_ID: ${{ inputs.test_id || 'v17' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v17.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V17 / 57 READ PAGINATED' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V17' }}
+      VERIFY2: ${{ inputs.verify2 || 'V17 COMPLETE' }}
       VERIFY3: ${{ inputs.verify3 || 'NO DMA / NO WRITES' }}
 
     steps:
@@ -59,19 +59,14 @@ jobs:
       - name: Validate test inputs
         run: |
           set -euxo pipefail
-          case "$TEST_ID" in *..*|*/*|*\*) exit 1;;
-          esac
+          case "$TEST_ID" in *..*|*/*|*\*) exit 1;; esac
           case "$SOURCE" in efi/*.c) ;; *) exit 1;; esac
           test -f "$SOURCE"
-          test -n "$LABEL"
-          test -n "$VERIFY1"
-          test -n "$VERIFY2"
-          test -n "$VERIFY3"
 
       - name: Checkout GNU-EFI
         uses: actions/checkout@v4
         with:
-          repository: "ncroxon/gnu-efi"
+          repository: ncroxon/gnu-efi
           path: gnu-efi
           ref: master
 
@@ -103,7 +98,7 @@ jobs:
       - name: Link
         run: |
           set -euxo pipefail
-          ld -shared -Bsymbolic -nostdlib -znocombreloc             -L"$(dirname "$GNUEFI_LIBEFI")"             -L"$(dirname "$GNUEFI_LIBGNUEFI")"             -T"$GNUEFI_ROOT/gnuefi/elf_x86_64_efi.lds"             "$GNUEFI_CRT" "build/$TEST_ID/test.o"             -o "build/$TEST_ID/BOOTX64-$TEST_ID.elf" -lgnuefi -lefi
+          ld -shared -Bsymbolic -nostdlib -znocombreloc             -L"$(dirname "$GNUEFI_LIBEFI")" -L"$(dirname "$GNUEFI_LIBGNUEFI")"             -T"$GNUEFI_ROOT/gnuefi/elf_x86_64_efi.lds"             "$GNUEFI_CRT" "build/$TEST_ID/test.o"             -o "build/$TEST_ID/BOOTX64-$TEST_ID.elf" -lgnuefi -lefi
 
       - name: Convert and verify EFI
         run: |
@@ -119,8 +114,8 @@ jobs:
       - name: Prepare artifact
         run: |
           set -euxo pipefail
-          cp "build/$TEST_ID/BOOTX64.EFI" "BOOTX64.EFI"
-          test -s "BOOTX64.EFI"
+          cp "build/$TEST_ID/BOOTX64.EFI" BOOTX64.EFI
+          test -s BOOTX64.EFI
 
       - uses: actions/upload-artifact@v4
         with:
