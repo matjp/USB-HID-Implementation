@@ -16,7 +16,7 @@ static EFI_STATUS mmio32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
 }
 
 static void done(void) {
-    Print(u"\r\nREAD-ONLY / 3 MMIO READS / NO DMA\r\n");
+    Print(u"\r\nREAD-ONLY / 4 MMIO READS / NO DMA\r\n");
     Print(u"EXIT %u SEC...\r\n", DELAY_SEC);
     uefi_call_wrapper(BS->Stall, 1, (UINTN)DELAY_SEC * 1000000);
 }
@@ -26,6 +26,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     EFI_PCI_IO_PROTOCOL *p = NULL;
     EFI_STATUS s;
     UINTN n = 0, i;
+    UINTN seg = 0, bus = 0, dev = 0, fun = 0;
     UINT32 id = 0, cls = 0, bar0 = 0, bar1 = 0;
     UINT32 cap0 = 0, usbcmd = 0, usbsts = 0, portsc1 = 0;
     UINT32 caplen, op_base, port1_off;
@@ -43,7 +44,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
     for (i = 0; i < n; ++i) {
         EFI_PCI_IO_PROTOCOL *q = NULL;
-        UINTN seg, bus, dev, fun;
+        UINTN sg, b, d, f;
 
         s = uefi_call_wrapper(BS->OpenProtocol, 6, hs[i], &PciGuid,
                               (void **)&q, image, NULL,
@@ -52,7 +53,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             continue;
 
         if (EFI_ERROR(uefi_call_wrapper(q->GetLocation, 5, q,
-                                         &seg, &bus, &dev, &fun)))
+                                         &sg, &b, &d, &f)))
             continue;
 
         if (EFI_ERROR(cfg32(q, 8, &cls)))
@@ -64,6 +65,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             continue;
 
         p = q;
+        seg = sg;
+        bus = b;
+        dev = d;
+        fun = f;
         break;
     }
 
@@ -82,7 +87,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     bar = ((UINT64)bar1 << 32) | ((UINT64)bar0 & ~0xFULL);
 
     Print(u"PCI %04x:%02x:%02x.%x %04x:%04x\r\n",
-          0u, 0u, 0u, 0u, id & 0xffff, id >> 16);
+          (UINT32)seg, (UINT32)bus, (UINT32)dev, (UINT32)fun,
+          id & 0xffff, id >> 16);
     Print(u"BAR0=%08x:%08x BASE=%016lx\r\n", bar1, bar0, bar);
 
     if ((bar0 & 1) != 0 || bar == 0) {
