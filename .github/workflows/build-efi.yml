@@ -8,32 +8,32 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v8"
+        default: "v9"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_three_read.c"
+        default: "efi/xhci_mmio_first_extcap.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V8 / HCCPARAMS1 READ"
+        default: "xHCI V9 / FIRST EXT CAP"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V8"
+        default: "xHCI V9"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
         required: true
-        default: "MMIO[004]="
+        default: "MMIO[010]="
         type: string
       verify3:
         description: "Third UTF-16 string to require"
         required: true
-        default: "READ-ONLY / 3 MMIO READS"
+        default: "READ-ONLY / 4 MMIO READS"
         type: string
 
 jobs:
@@ -43,12 +43,12 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v8' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_three_read.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V8 / HCCPARAMS1 READ' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V8' }}
-      VERIFY2: ${{ inputs.verify2 || 'MMIO[004]=' }}
-      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 3 MMIO READS' }}
+      TEST_ID: ${{ inputs.test_id || 'v9' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_first_extcap.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V9 / FIRST EXT CAP' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V9' }}
+      VERIFY2: ${{ inputs.verify2 || 'MMIO[010]=' }}
+      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 4 MMIO READS' }}
 
     steps:
       - uses: actions/checkout@v4
