@@ -1,6 +1,6 @@
 # Minimal x86-64 OS — USB / xHCI Project State
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
 
 ## Goal
 
@@ -61,8 +61,9 @@ For PCI/xHCI work:
 ## Experimental safety rules
 
 - Read-only diagnostics come before controller modification.
-- Do not perform PCI configuration writes, xHCI MMIO writes, controller resets, ownership changes, DMA activation, ring setup, or interrupt setup on production/dual-boot hardware unless the experiment has been explicitly reviewed and accepted.
-- Active xHCI initialization and DMA experiments should use sacrificial hardware.
+- The Toshiba development machine is intentionally designated as the sacrificial hardware platform for active xHCI experiments. This is a deliberate project decision to accelerate development.
+- Do not perform PCI configuration writes, xHCI MMIO writes, controller resets, ownership changes, DMA activation, ring setup, or interrupt setup on other production/dual-boot hardware unless the experiment has been explicitly reviewed and accepted.
+- Active xHCI initialization and DMA experiments should use the Toshiba or other hardware explicitly designated as sacrificial.
 - Before active DMA experiments, investigate IOMMU/DMA isolation and establish exactly which memory can be accessed by the controller.
 - Prefer experiments that can be independently reset/recovered and that cannot modify storage.
 - Treat any uncertainty about controller ownership, firmware state, DMA, or register semantics as a reason to stop and verify.
@@ -71,4 +72,20 @@ For PCI/xHCI work:
 
 Read-only xHCI/PCI diagnostics and architecture investigation.
 
-Next major hardware step: obtain an inexpensive sacrificial x86-64 UEFI machine for active xHCI experiments.
+The Toshiba is the designated sacrificial development machine. Once the remaining read-only baseline questions are answered, move promptly to active xHCI initialization experiments on the Toshiba rather than waiting for another sacrificial machine.
+
+## Immediate roadmap
+
+1. Complete the current read-only xHCI baseline with V18.
+2. Review the V18 results against the project goal and the verified xHCI architecture.
+3. Begin active xHCI initialization experiments on the Toshiba.
+4. Establish the minimum DMA/ring/context machinery required for one USB device.
+5. Enumerate a USB device and establish basic control/bulk/interrupt transfer capability as required by the chosen HID path.
+6. Implement HID boot-protocol keyboard support.
+7. Implement HID boot-protocol mouse support.
+8. Put the USB/xHCI implementation behind the planned USB service boundary.
+9. Provide the kernel with an abstract keyboard/mouse input interface.
+10. Integrate the USB service and input path into the minimal x86-64 OS.
+11. Use additional non-sacrificial hardware for compatibility testing once the core implementation is stable.
+
+The objective is to keep experiments focused on advancing this roadmap; do not create additional diagnostic versions merely for extra confidence when the existing evidence is sufficient to move forward.
