@@ -90,6 +90,37 @@ Expected Toshiba result if the MMIO path is healthy:
 - BAR base 0xF7C00000
 - MMIO[000] should encode a plausible xHCI CAPLENGTH and HCIVERSION, consistent with the earlier E002 observation (CAPLENGTH 0x80, version 0x0100).
 
+## E004 — PCI BAR attribute isolation test on Toshiba Satellite P50
+
+Status: next test.
+
+Purpose:
+
+- Determine how the UEFI PCI I/O layer classifies BAR0 without performing any xHCI MMIO read.
+- Compare the raw PCI configuration-space BAR encoding with EFI_PCI_IO_PROTOCOL.GetBarAttributes().
+- Query the current PCI I/O controller attributes without changing them.
+
+Test operations:
+
+- Discover xHCI by PCI class 0c:03:30.
+- Read PCI config space only: vendor/device, class code, BAR0/BAR1.
+- Call GetBarAttributes(BAR0) requesting only the Supports mask; Resources is NULL.
+- Call Attributes(Get) to report the current PCI I/O attributes.
+- No Mem.Read, Mem.Write, Pci.Write, SetBarAttributes, DMA, reset, rings, interrupts, or doorbells.
+- 30-second exit delay.
+
+The UEFI specification defines GetBarAttributes() as a query of BAR attributes/resources; its Supports result distinguishes 32-bit versus 64-bit BAR capability. Attributes(Get) retrieves current attributes without requesting a state change. citeturn3search0turn3search14
+
+Expected Toshiba result:
+
+- PCI 00:14.0 / 8086:8c31
+- BAR0 raw value 0xF7C00004 and BAR1 0x00000000
+- BAR type 64-bit
+- BAR attribute query should report 64-bit support if the firmware represents the BAR accordingly
+- PCI memory-space attribute should normally be enabled if the controller is already operating
+
+This experiment is intentionally between PCI configuration probing and MMIO. If E004 succeeds while E003 fails, the evidence points specifically at the EFI MMIO access path rather than PCI enumeration or BAR interpretation.
+
 ## Safety rule
 
 Any experiment that starts/configures xHCI DMA should be performed on sacrificial hardware first.
