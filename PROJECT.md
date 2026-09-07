@@ -29,7 +29,7 @@ The kernel should see an abstract input interface rather than USB/xHCI details.
 ## Current direction
 
 - Target xHCI as the common modern USB controller.
-- Initially support one keyboard and one mouse.
+- Initially support one externally connected USB keyboard and one externally connected USB mouse. The Toshiba's built-in keyboard/trackpad are not assumed to be USB devices and are not part of the USB HID target.
 - Prefer USB HID boot-protocol keyboard and mouse.
 - Avoid implementing a complete general-purpose USB stack.
 - Prefer a separate USB service over putting xHCI code in the kernel.
@@ -77,9 +77,9 @@ The Toshiba is the designated sacrificial development machine. After the boot-ti
 ## Immediate roadmap
 
 1. Verify the read-only xHCI baseline through V19, including stable PORTSC reads on the Toshiba.
-2. Verify V20 boot-time connected-device detection: identify which xHCI ports have a device present at OS startup and record port state/speed without modifying controller state.
+2. Verify V20 boot-time connected-device detection with a known external USB device. The Toshiba's internal keyboard and trackpad are excluded from this test because the observed Linux input devices are presented through the i8042/serio path rather than as USB devices.
 3. Do not add a hot-plug detection stage; connect/disconnect events during runtime are outside the experimental OS requirement.
-4. Begin active xHCI initialization experiments on the Toshiba immediately after V20 is validated.
+4. Use an external USB keyboard and/or USB mouse connected before boot as the known target device(s), then begin active xHCI initialization experiments on the Toshiba immediately after V20 is validated.
 5. Establish the minimum controller ownership, stop/reset, DCBAA, command-ring, event-ring, and device-context machinery required for one pre-connected USB device, with DMA safety investigated first.
 6. Enumerate one USB device using control transfers and obtain the device/configuration descriptors.
 7. Identify a USB HID interface and establish the minimum interrupt-transfer path required for the chosen boot-protocol keyboard/mouse design.
