@@ -8,22 +8,22 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v7"
+        default: "v8"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_two_read.c"
+        default: "efi/xhci_mmio_three_read.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V7 / TWO-MMIO READS"
+        default: "xHCI V8 / HCCPARAMS1 READ"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V7"
+        default: "xHCI V8"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
@@ -33,7 +33,7 @@ on:
       verify3:
         description: "Third UTF-16 string to require"
         required: true
-        default: "READ-ONLY / 2 MMIO READS"
+        default: "READ-ONLY / 3 MMIO READS"
         type: string
 
 jobs:
@@ -43,12 +43,12 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v7' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_two_read.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V7 / TWO-MMIO READS' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V7' }}
+      TEST_ID: ${{ inputs.test_id || 'v8' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_three_read.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V8 / HCCPARAMS1 READ' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V8' }}
       VERIFY2: ${{ inputs.verify2 || 'MMIO[004]=' }}
-      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 2 MMIO READS' }}
+      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 3 MMIO READS' }}
 
     steps:
       - uses: actions/checkout@v4
