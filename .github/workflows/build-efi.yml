@@ -8,22 +8,22 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v14"
+        default: "v15"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_all_ports.c"
+        default: "efi/xhci_mmio_port14_16_repeat.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V14 / ALL PORTSC READ"
+        default: "xHCI V15 / PORT14-16 REPEAT"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V14"
+        default: "xHCI V15"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
@@ -43,10 +43,10 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v14' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_all_ports.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V14 / ALL PORTSC READ' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V14' }}
+      TEST_ID: ${{ inputs.test_id || 'v15' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_port14_16_repeat.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V15 / PORT14-16 REPEAT' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V15' }}
       VERIFY2: ${{ inputs.verify2 || 'MAXPORTS' }}
       VERIFY3: ${{ inputs.verify3 || 'NO DMA / NO WRITES' }}
 
