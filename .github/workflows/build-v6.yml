@@ -14,18 +14,23 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y gcc binutils unzip file
 
-      - name: Extract GNU-EFI
+      - name: Checkout GNU-EFI
+        uses: actions/checkout@v4
+        with:
+          repository: 'ncroxon/gnu-efi'
+          path: 'gnu-efi'
+          ref: 'master'
+
+      - name: Build GNU-EFI
         run: |
           set -euxo pipefail
-          rm -rf build
-          mkdir -p build/gnu-efi
-          unzip -q gnu-efi.zip -d build/gnu-efi
-          make -C build/gnu-efi/gnu-efi ARCH=x86_64
+          make -C gnu-efi ARCH=x86_64
 
       - name: Locate GNU-EFI
+
         run: |
           set -euxo pipefail
-          ROOT="$GITHUB_WORKSPACE/build/gnu-efi/gnu-efi"
+          ROOT="$GITHUB_WORKSPACE/gnu-efi"
           test -f "$ROOT/gnuefi/elf_x86_64_efi.lds"
           CRT=$(find "$ROOT" -type f -name 'crt0-efi-x86_64.o' -print -quit)
           LIBEFI=$(find "$ROOT" -type f -name 'libefi.a' -print -quit)
