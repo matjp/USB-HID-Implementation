@@ -36,7 +36,7 @@ on:
       verify3:
         description: "Third string to require"
         required: true
-        default: "NO DMA / NO WRITES"
+        default: "NO DMA"
         type: string
 
 concurrency:
