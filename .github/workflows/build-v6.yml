@@ -41,7 +41,7 @@ jobs:
           echo "GNUEFI_CRT=$CRT" >> "$GITHUB_ENV"
           echo "GNUEFI_LIBEFI=$LIBEFI" >> "$GITHUB_ENV"
           echo "GNUEFI_LIBGNUEFI=$LIBGNUEFI" >> "$GITHUB_ENV"
-          echo "GNUEFI_INC=$(dirname "$(dirname "$INC")")" >> "$GITHUB_ENV"
+          echo "GNUEFI_INC=$(dirname "$INC")" >> "$GITHUB_ENV"
 
       - name: Compile V6
         run: |
