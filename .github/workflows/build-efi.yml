@@ -8,22 +8,22 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v10"
+        default: "v11"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_extcap_name.c"
+        default: "efi/xhci_mmio_supported_protocol.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V10 / EXT CAP +04"
+        default: "xHCI V11 / SUPPORTED PROTOCOL"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V10"
+        default: "xHCI V11"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
@@ -33,7 +33,7 @@ on:
       verify3:
         description: "Third UTF-16 string to require"
         required: true
-        default: "READ-ONLY / 5 MMIO READS"
+        default: "READ-ONLY / 6 MMIO READS"
         type: string
 
 jobs:
