@@ -1,75 +1,79 @@
 name: Build Toshiba V6 EFI
 
-on:
-  push:
-    paths:
-      - 'efi/xhci_mmio_one_read.c'
-      - 'gnu-efi.zip'
-      - '.github/workflows/build-v6.yml'
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  build-v6:
+    name: Build BOOTX64.EFI
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y gcc binutils make unzip
-      - name: Extract GNU-EFI
         run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc binutils make unzip file
+
+      - name: Extract GNU-EFI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf build
           mkdir -p build/gnu-efi
           unzip -q gnu-efi.zip -d build/gnu-efi
-          find build/gnu-efi -maxdepth 3 -type f | head -50
-      - name: Locate GNU-EFI root
+          find build/gnu-efi -type f -name 'elf_x86_64_efi.lds' -print
+
+      - name: Locate GNU-EFI
+        shell: bash
         run: |
-          set -eux
-          ROOT=$(find build/gnu-efi -type f -name 'elf_x86_64_efi.lds' -printf '%h
-' | head -1 | sed 's#/gnuefi$##')
-          test -n "$ROOT"
-          echo "GNU_EFI_ROOT=$ROOT" >> "$GITHUB_ENV"
-          test -f "$ROOT/x86_64/gnuefi/crt0-efi-x86_64.o"
-          test -f "$ROOT/x86_64/lib/libefi.a"
-          test -f "$ROOT/x86_64/gnuefi/libgnuefi.a"
-      - name: Build V6
+          set -euxo pipefail
+          LDS=$(find "$GITHUB_WORKSPACE/build/gnu-efi" -type f -name 'elf_x86_64_efi.lds' -print -quit)
+          test -n "$LDS"
+          GNUEFI_ROOT=$(dirname "$(dirname "$LDS")")
+          echo "GNUEFI_ROOT=$GNUEFI_ROOT" >> "$GITHUB_ENV"
+          test -f "$GNUEFI_ROOT/x86_64/gnuefi/crt0-efi-x86_64.o"
+          test -f "$GNUEFI_ROOT/x86_64/gnuefi/libgnuefi.a"
+          test -f "$GNUEFI_ROOT/x86_64/lib/libefi.a"
+
+      - name: Compile V6
         run: |
-          set -eux
+          set -euxo pipefail
           mkdir -p build/v6
-          gcc \
-            -I"$GNU_EFI_ROOT/inc" \
-            -I"$GNU_EFI_ROOT/inc/x86_64" \
-            -I"$GNU_EFI_ROOT/inc/protocol" \
-            -fpic -ffreestanding -fno-stack-protector -fno-stack-check \
-            -fshort-wchar -mno-red-zone -maccumulate-outgoing-args \
-            -DEFI_FUNCTION_WRAPPER \
-            -c efi/xhci_mmio_one_read.c -o build/v6/xhci_mmio_one_read.o
-          ld -shared -Bsymbolic -nostdlib -znocombreloc \
-            -L"$GNU_EFI_ROOT/x86_64/lib" \
-            -L"$GNU_EFI_ROOT/x86_64/gnuefi" \
-            -T"$GNU_EFI_ROOT/gnuefi/elf_x86_64_efi.lds" \
-            "$GNU_EFI_ROOT/x86_64/gnuefi/crt0-efi-x86_64.o" \
-            build/v6/xhci_mmio_one_read.o \
-            -o build/v6/BOOTX64-V6.elf \
-            -lgnuefi -lefi
-          objcopy \
-            -j .text -j .sdata -j .data -j .rodata \
-            -j .dynamic -j .dynsym -j .rel -j .rela \
-            -j .rel.* -j .rela.* -j .reloc \
-            --output-target=efi-app-x86_64 \
-            --subsystem=10 \
-            build/v6/BOOTX64-V6.elf build/v6/BOOTX64.EFI
-      - name: Verify EFI
+          gcc             -I"$GNUEFI_ROOT/inc"             -I"$GNUEFI_ROOT/inc/x86_64"             -I"$GNUEFI_ROOT/inc/protocol"             -fpic -ffreestanding -fno-stack-protector -fno-stack-check             -fshort-wchar -mno-red-zone -maccumulate-outgoing-args             -DEFI_FUNCTION_WRAPPER             -Wall -Wextra -Os             -c efi/xhci_mmio_one_read.c             -o build/v6/xhci_mmio_one_read.o
+
+      - name: Link V6
         run: |
-          set -eux
+          set -euxo pipefail
+          ld -shared -Bsymbolic -nostdlib -znocombreloc             -L"$GNUEFI_ROOT/x86_64/lib"             -L"$GNUEFI_ROOT/x86_64/gnuefi"             -T"$GNUEFI_ROOT/x86_64/gnuefi/elf_x86_64_efi.lds"             "$GNUEFI_ROOT/x86_64/gnuefi/crt0-efi-x86_64.o"             build/v6/xhci_mmio_one_read.o             -o build/v6/BOOTX64-V6.elf             -lgnuefi -lefi
+
+      - name: Convert to EFI PE/COFF
+        run: |
+          set -euxo pipefail
+          objcopy             -j .text -j .sdata -j .data -j .rodata             -j .dynamic -j .dynsym -j .rel -j .rela             -j .rel.* -j .rela.* -j .reloc             --output-target=efi-app-x86_64             --subsystem=10             build/v6/BOOTX64-V6.elf             build/v6/BOOTX64.EFI
+
+      - name: Verify
+        run: |
+          set -euxo pipefail
           file build/v6/BOOTX64.EFI
           objdump -h build/v6/BOOTX64.EFI
-          strings -a build/v6/BOOTX64.EFI | grep -E 'TOSHIBA xHCI V6|ONE-MMIO|MMIO\[000\]'
+          strings -a build/v6/BOOTX64.EFI | grep -F 'TOSHIBA xHCI V6 / ONE-MMIO READ'
+          strings -a build/v6/BOOTX64.EFI | grep -F 'MMIO[000]='
+          test -s build/v6/BOOTX64.EFI
+
       - name: Package
         run: |
-          mkdir -p artifact/EFI/BOOT
-          cp build/v6/BOOTX64.EFI artifact/EFI/BOOT/BOOTX64.EFI
-          cp efi/xhci_mmio_one_read.c artifact/
-          zip -qr BOOTX64-Toshiba-V6.zip artifact
-      - uses: actions/upload-artifact@v4
+          set -euxo pipefail
+          mkdir -p package/EFI/BOOT
+          cp build/v6/BOOTX64.EFI package/EFI/BOOT/BOOTX64.EFI
+          cp efi/xhci_mmio_one_read.c package/
+          (cd package && zip -qr ../BOOTX64-Toshiba-V6.zip .)
+
+      - name: Upload V6 artifact
+        uses: actions/upload-artifact@v4
         with:
           name: Toshiba-V6-EFI
           path: BOOTX64-Toshiba-V6.zip
+          if-no-files-found: error
