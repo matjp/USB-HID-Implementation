@@ -73,8 +73,9 @@ jobs:
             build/v6/BOOTX64-V6.elf build/v6/BOOTX64.EFI
           file build/v6/BOOTX64.EFI
           objdump -h build/v6/BOOTX64.EFI
-          strings -a build/v6/BOOTX64.EFI | grep -F 'TOSHIBA xHCI V6 / ONE-MMIO READ'
+          strings -a build/v6/BOOTX64.EFI | grep -F 'xHCI V6'
           strings -a build/v6/BOOTX64.EFI | grep -F 'MMIO[000]='
+          strings -a build/v6/BOOTX64.EFI | grep -F 'READ-ONLY / 1 MMIO READ'
           test -s build/v6/BOOTX64.EFI
 
       - name: Package
