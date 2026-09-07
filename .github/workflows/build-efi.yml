@@ -39,8 +39,13 @@ on:
         default: "NO DMA / NO WRITES"
         type: string
 
+concurrency:
+  group: build-efi-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'Build ') }}
     name: Build EFI test
     runs-on: ubuntu-latest
     permissions:
@@ -48,10 +53,10 @@ jobs:
     env:
       TEST_ID: ${{ inputs.test_id || 'v22' }}
       SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v22.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V22 / ACTIVE-INIT PRECHECK' }}
+      LABEL: ${{ inputs.label || 'xHCI V22 / CONTROLLED HALT-RESUME' }}
       VERIFY1: ${{ inputs.verify1 || 'xHCI V22' }}
       VERIFY2: ${{ inputs.verify2 || 'V22 COMPLETE' }}
-      VERIFY3: ${{ inputs.verify3 || 'NO DMA / NO WRITES' }}
+      VERIFY3: ${{ inputs.verify3 || 'NO DMA' }}
 
     steps:
       - uses: actions/checkout@v4
