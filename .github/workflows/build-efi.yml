@@ -8,22 +8,22 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v15"
+        default: "v16"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_port14_16_repeat.c"
+        default: "efi/xhci_mmio_all_ports_repeat3.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V15 / PORT14-16 REPEAT"
+        default: "xHCI V16 / ALL PORTSC 3X REPEAT"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V15"
+        default: "xHCI V16"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
@@ -43,10 +43,10 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v15' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_port14_16_repeat.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V15 / PORT14-16 REPEAT' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V15' }}
+      TEST_ID: ${{ inputs.test_id || 'v16' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_all_ports_repeat3.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V16 / ALL PORTSC 3X REPEAT' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V16' }}
       VERIFY2: ${{ inputs.verify2 || 'MAXPORTS' }}
       VERIFY3: ${{ inputs.verify3 || 'NO DMA / NO WRITES' }}
 
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y gcc binutils file zip
+        run: sudo apt-get update && sudo apt-get install -y gcc binutils file
 
       - name: Validate test inputs
         run: |
@@ -116,17 +116,14 @@ jobs:
           strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$VERIFY3"
           test -s "build/$TEST_ID/BOOTX64.EFI"
 
-      - name: Package
+      - name: Prepare artifact
         run: |
           set -euxo pipefail
-          mkdir -p "package/$TEST_ID/EFI/BOOT"
-          cp "build/$TEST_ID/BOOTX64.EFI" "package/$TEST_ID/EFI/BOOT/BOOTX64.EFI"
-          cp "$SOURCE" "package/$TEST_ID/"
-          printf '%s\n' "$LABEL" > "package/$TEST_ID/TEST.txt"
-          (cd "package/$TEST_ID" && zip -qr "../../BOOTX64-$TEST_ID.zip" .)
+          cp "build/$TEST_ID/BOOTX64.EFI" "BOOTX64.EFI"
+          test -s "BOOTX64.EFI"
 
       - uses: actions/upload-artifact@v4
         with:
           name: EFI-${{ env.TEST_ID }}
-          path: BOOTX64-${{ env.TEST_ID }}.zip
+          path: BOOTX64.EFI
           if-no-files-found: error
