@@ -3,6 +3,9 @@ name: Build EFI Test
 on:
   push:
     branches: [main]
+    paths:
+      - 'efi/**'
+      - '.github/workflows/build-efi.yml'
   workflow_dispatch:
     inputs:
       test_id:
