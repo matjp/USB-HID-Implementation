@@ -70,22 +70,24 @@ For PCI/xHCI work:
 
 ## Current phase
 
-Read-only xHCI/PCI diagnostics and architecture investigation.
+Read-only xHCI/PCI diagnostics are now focused specifically on the boot-time assumptions required by the OS: detecting devices already connected when the machine boots. Hot-plug/connect/disconnect detection is not a project requirement because the experimental OS assumes the keyboard and mouse remain connected for the session.
 
-The Toshiba is the designated sacrificial development machine. Once the remaining read-only baseline questions are answered, move promptly to active xHCI initialization experiments on the Toshiba rather than waiting for another sacrificial machine.
+The Toshiba is the designated sacrificial development machine. After the boot-time connected-device detection baseline is verified, move promptly to active xHCI initialization experiments on the Toshiba rather than adding further passive diagnostics.
 
 ## Immediate roadmap
 
-1. Complete the current read-only xHCI baseline with V18.
-2. Review the V18 results against the project goal and the verified xHCI architecture.
-3. Begin active xHCI initialization experiments on the Toshiba.
-4. Establish the minimum DMA/ring/context machinery required for one USB device.
-5. Enumerate a USB device and establish basic control/bulk/interrupt transfer capability as required by the chosen HID path.
-6. Implement HID boot-protocol keyboard support.
-7. Implement HID boot-protocol mouse support.
-8. Put the USB/xHCI implementation behind the planned USB service boundary.
-9. Provide the kernel with an abstract keyboard/mouse input interface.
-10. Integrate the USB service and input path into the minimal x86-64 OS.
-11. Use additional non-sacrificial hardware for compatibility testing once the core implementation is stable.
+1. Verify the read-only xHCI baseline through V19, including stable PORTSC reads on the Toshiba.
+2. Verify V20 boot-time connected-device detection: identify which xHCI ports have a device present at OS startup and record port state/speed without modifying controller state.
+3. Do not add a hot-plug detection stage; connect/disconnect events during runtime are outside the experimental OS requirement.
+4. Begin active xHCI initialization experiments on the Toshiba immediately after V20 is validated.
+5. Establish the minimum controller ownership, stop/reset, DCBAA, command-ring, event-ring, and device-context machinery required for one pre-connected USB device, with DMA safety investigated first.
+6. Enumerate one USB device using control transfers and obtain the device/configuration descriptors.
+7. Identify a USB HID interface and establish the minimum interrupt-transfer path required for the chosen boot-protocol keyboard/mouse design.
+8. Implement HID boot-protocol keyboard support.
+9. Implement HID boot-protocol mouse support.
+10. Put the USB/xHCI implementation behind the planned USB service boundary.
+11. Provide the kernel with an abstract keyboard/mouse input interface.
+12. Integrate the USB service and input path into the minimal x86-64 OS.
+13. Use additional non-sacrificial hardware for compatibility testing once the core implementation is stable.
 
 The objective is to keep experiments focused on advancing this roadmap; do not create additional diagnostic versions merely for extra confidence when the existing evidence is sufficient to move forward.
