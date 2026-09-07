@@ -8,22 +8,22 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v11"
+        default: "v12"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_supported_protocol.c"
+        default: "efi/xhci_mmio_operational_read.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V11 / SUPPORTED PROTOCOL"
+        default: "xHCI V12 / OPERATIONAL READ"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V11"
+        default: "xHCI V12"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
@@ -33,7 +33,7 @@ on:
       verify3:
         description: "Third UTF-16 string to require"
         required: true
-        default: "READ-ONLY / 6 MMIO READS"
+        default: "READ-ONLY / 4 MMIO READS"
         type: string
 
 jobs:
@@ -43,12 +43,12 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v11' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_supported_protocol.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V11 / SUPPORTED PROTOCOL' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V11' }}
+      TEST_ID: ${{ inputs.test_id || 'v12' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_operational_read.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V12 / OPERATIONAL READ' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V12' }}
       VERIFY2: ${{ inputs.verify2 || 'ASCII=' }}
-      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 6 MMIO READS' }}
+      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 4 MMIO READS' }}
 
     steps:
       - uses: actions/checkout@v4
