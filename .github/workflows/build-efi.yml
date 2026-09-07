@@ -8,22 +8,22 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v13"
+        default: "v14"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_structure_port2.c"
+        default: "efi/xhci_mmio_all_ports.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V13 / STRUCTURE + PORT2 READ"
+        default: "xHCI V14 / ALL PORTSC READ"
         type: string
       verify1:
         description: "First UTF-16 string to require"
         required: true
-        default: "xHCI V13"
+        default: "xHCI V14"
         type: string
       verify2:
         description: "Second UTF-16 string to require"
@@ -33,7 +33,7 @@ on:
       verify3:
         description: "Third UTF-16 string to require"
         required: true
-        default: "READ-ONLY / 8 MMIO READS"
+        default: "NO DMA / NO WRITES"
         type: string
 
 jobs:
@@ -43,12 +43,12 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v13' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_structure_port2.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V13 / STRUCTURE + PORT2 READ' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V13' }}
+      TEST_ID: ${{ inputs.test_id || 'v14' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_all_ports.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V14 / ALL PORTSC READ' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V14' }}
       VERIFY2: ${{ inputs.verify2 || 'MAXPORTS' }}
-      VERIFY3: ${{ inputs.verify3 || 'READ-ONLY / 8 MMIO READS' }}
+      VERIFY3: ${{ inputs.verify3 || 'NO DMA / NO WRITES' }}
 
     steps:
       - uses: actions/checkout@v4
