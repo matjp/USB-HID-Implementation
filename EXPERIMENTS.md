@@ -25,7 +25,7 @@ No intentional xHCI controller writes were performed.
 
 ## E002 — Read-only xHCI capability/DMA probe on Toshiba Satellite P50
 
-Status: ready to run.
+Status: completed.
 
 Purpose:
 
@@ -36,16 +36,59 @@ Purpose:
 - Identify Supported Protocol capabilities and their compatible port ranges.
 - Identify USB Legacy Support and USB Debug Capability locations without modifying them.
 
+Observed Toshiba controller:
+
+- PCI 00:14.0
+- Intel 8086:8c31
+- BAR base 0xF7C00000 (64-bit BAR encoding, but assigned address is below 4 GiB)
+- xHCI version 1.00
+- 32 slots
+- 19 interrupters
+- 18 ports
+- AC64=1
+- controller observed running
+- Supported Protocol capability reported the root-port range covering the controller's ports
+
 Safety:
 
-- PCI configuration is read-only.
-- xHCI MMIO accesses are read-only.
+- PCI configuration was read-only.
+- xHCI MMIO accesses were read-only.
 - No controller reset, ownership change, DMA, rings, interrupts, or doorbell writes.
-- 30-second delay before exit.
 
 Important verification note: the Supported Protocol capability's compatible port offset/count are in its third DWORD (capability offset + 0x08), not the preceding DWORD. This was checked against the xHCI specification before implementing E002.
 
-Expected next evidence: compare Toshiba E002 results with the existing Dell observations before deciding whether any controller-initialization experiment is justified.
+## E003 — One-MMIO-read isolation test on Toshiba Satellite P50
+
+Status: next test.
+
+Purpose:
+
+- Isolate the previously observed instability to the smallest possible MMIO operation.
+- Discover the xHCI controller by PCI class.
+- Read the PCI BAR through configuration space.
+- Perform exactly ONE read through EFI_PCI_IO_PROTOCOL.Mem.Read at BAR0 offset 0.
+- Decode only CAPLENGTH and HCIVERSION from that single DWORD.
+
+Safety boundary:
+
+- No PCI configuration writes.
+- No xHCI MMIO writes.
+- No operational-register reads.
+- No port-status reads.
+- No extended-capability reads.
+- No DMA, rings, interrupts, controller reset, or ownership changes.
+- No direct CPU pointer dereference of the BAR.
+- 30-second exit delay.
+
+Rationale:
+
+The previous successful Toshiba diagnostics establish that PCI discovery and configuration-space reads work. This experiment deliberately avoids all operational/port/extended MMIO reads so that a failure can be attributed specifically to the first MMIO access path. The EFI PCI I/O protocol is used for the MMIO access rather than directly dereferencing the physical BAR address.
+
+Expected Toshiba result if the MMIO path is healthy:
+
+- PCI 00:14.0 / 8086:8c31
+- BAR base 0xF7C00000
+- MMIO[000] should encode a plausible xHCI CAPLENGTH and HCIVERSION, consistent with the earlier E002 observation (CAPLENGTH 0x80, version 0x0100).
 
 ## Safety rule
 
