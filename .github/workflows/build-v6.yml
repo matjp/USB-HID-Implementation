@@ -9,54 +9,62 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc binutils make unzip file
+        run: sudo apt-get update && sudo apt-get install -y gcc binutils unzip file
 
       - name: Extract GNU-EFI
-        shell: bash
         run: |
           set -euxo pipefail
           rm -rf build
           mkdir -p build/gnu-efi
           unzip -q gnu-efi.zip -d build/gnu-efi
-          find build/gnu-efi -type f -name 'elf_x86_64_efi.lds' -print
 
       - name: Locate GNU-EFI
-        shell: bash
         run: |
           set -euxo pipefail
-          LDS=$(find "$GITHUB_WORKSPACE/build/gnu-efi" -type f -name 'elf_x86_64_efi.lds' -print -quit)
-          test -n "$LDS"
-          GNUEFI_ROOT=$(dirname "$(dirname "$LDS")")
-          echo "GNUEFI_ROOT=$GNUEFI_ROOT" >> "$GITHUB_ENV"
-          test -f "$GNUEFI_ROOT/x86_64/gnuefi/crt0-efi-x86_64.o"
-          test -f "$GNUEFI_ROOT/x86_64/gnuefi/libgnuefi.a"
-          test -f "$GNUEFI_ROOT/x86_64/lib/libefi.a"
+          ROOT="$GITHUB_WORKSPACE/build/gnu-efi/gnu-efi"
+          test -f "$ROOT/gnuefi/elf_x86_64_efi.lds"
+          CRT=$(find "$ROOT" -type f -name 'crt0-efi-x86_64.o' -print -quit)
+          LIBEFI=$(find "$ROOT" -type f -name 'libefi.a' -print -quit)
+          LIBGNUEFI=$(find "$ROOT" -type f -name 'libgnuefi.a' -print -quit)
+          INC=$(find "$ROOT" -type f -path '*/inc/efi.h' -print -quit)
+          test -n "$CRT"; test -n "$LIBEFI"; test -n "$LIBGNUEFI"; test -n "$INC"
+          echo "GNUEFI_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "GNUEFI_CRT=$CRT" >> "$GITHUB_ENV"
+          echo "GNUEFI_LIBEFI=$LIBEFI" >> "$GITHUB_ENV"
+          echo "GNUEFI_LIBGNUEFI=$LIBGNUEFI" >> "$GITHUB_ENV"
+          echo "GNUEFI_INC=$(dirname "$(dirname "$INC")")" >> "$GITHUB_ENV"
 
       - name: Compile V6
         run: |
           set -euxo pipefail
           mkdir -p build/v6
-          gcc             -I"$GNUEFI_ROOT/inc"             -I"$GNUEFI_ROOT/inc/x86_64"             -I"$GNUEFI_ROOT/inc/protocol"             -fpic -ffreestanding -fno-stack-protector -fno-stack-check             -fshort-wchar -mno-red-zone -maccumulate-outgoing-args             -DEFI_FUNCTION_WRAPPER             -Wall -Wextra -Os             -c efi/xhci_mmio_one_read.c             -o build/v6/xhci_mmio_one_read.o
+          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" \
+            -fpic -ffreestanding -fno-stack-protector -fno-stack-check \
+            -fshort-wchar -mno-red-zone -maccumulate-outgoing-args \
+            -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os \
+            -c efi/xhci_mmio_one_read.c -o build/v6/xhci_mmio_one_read.o
 
       - name: Link V6
         run: |
           set -euxo pipefail
-          ld -shared -Bsymbolic -nostdlib -znocombreloc             -L"$GNUEFI_ROOT/x86_64/lib"             -L"$GNUEFI_ROOT/x86_64/gnuefi"             -T"$GNUEFI_ROOT/x86_64/gnuefi/elf_x86_64_efi.lds"             "$GNUEFI_ROOT/x86_64/gnuefi/crt0-efi-x86_64.o"             build/v6/xhci_mmio_one_read.o             -o build/v6/BOOTX64-V6.elf             -lgnuefi -lefi
+          GNUEFI_DIR=$(dirname "$GNUEFI_CRT")
+          ld -shared -Bsymbolic -nostdlib -znocombreloc \
+            -L"$(dirname "$GNUEFI_LIBEFI")" \
+            -L"$(dirname "$GNUEFI_LIBGNUEFI")" \
+            -T"$GNUEFI_ROOT/gnuefi/elf_x86_64_efi.lds" \
+            "$GNUEFI_CRT" build/v6/xhci_mmio_one_read.o \
+            -o build/v6/BOOTX64-V6.elf -lgnuefi -lefi
 
-      - name: Convert to EFI PE/COFF
+      - name: Convert and verify EFI
         run: |
           set -euxo pipefail
-          objcopy             -j .text -j .sdata -j .data -j .rodata             -j .dynamic -j .dynsym -j .rel -j .rela             -j .rel.* -j .rela.* -j .reloc             --output-target=efi-app-x86_64             --subsystem=10             build/v6/BOOTX64-V6.elf             build/v6/BOOTX64.EFI
-
-      - name: Verify
-        run: |
-          set -euxo pipefail
+          objcopy -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym \
+            -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc \
+            --output-target=efi-app-x86_64 --subsystem=10 \
+            build/v6/BOOTX64-V6.elf build/v6/BOOTX64.EFI
           file build/v6/BOOTX64.EFI
           objdump -h build/v6/BOOTX64.EFI
           strings -a build/v6/BOOTX64.EFI | grep -F 'TOSHIBA xHCI V6 / ONE-MMIO READ'
@@ -71,8 +79,7 @@ jobs:
           cp efi/xhci_mmio_one_read.c package/
           (cd package && zip -qr ../BOOTX64-Toshiba-V6.zip .)
 
-      - name: Upload V6 artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: Toshiba-V6-EFI
           path: BOOTX64-Toshiba-V6.zip
