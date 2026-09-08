@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'efi/**
+      - 'efi/**'
   workflow_dispatch:
     inputs:
       test_id:
