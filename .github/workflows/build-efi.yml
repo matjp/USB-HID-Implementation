@@ -1,37 +1,38 @@
 name: Build EFI Test
-# V23 rebuild trigger
 
 on:
   push:
     branches: [main]
     paths:
       - 'efi/**'
+    paths-ignore:
+      - '.github/workflows/build-efi.yml'
   workflow_dispatch:
     inputs:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v23"
+        default: "v24"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v23.c"
+        default: "efi/xhci_mmio_v24.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V23 / HOST CONTROLLER RESET"
+        default: "xHCI V24 / HALT THEN HOST CONTROLLER RESET"
         type: string
       verify1:
         description: "First string to require"
         required: true
-        default: "xHCI V23"
+        default: "xHCI V24"
         type: string
       verify2:
         description: "Second string to require"
         required: true
-        default: "V23 COMPLETE"
+        default: "V24 COMPLETE"
         type: string
       verify3:
         description: "Third string to require"
