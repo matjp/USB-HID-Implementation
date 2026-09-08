@@ -1,4 +1,5 @@
 #include <efi.h>
+/* V23 build marker: source is intentionally unchanged in behavior. */
 #include <efilib.h>
 #include <efipciio.h>
 
