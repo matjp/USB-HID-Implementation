@@ -1,10 +1,6 @@
 name: Build EFI Test
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'efi/**'
   workflow_dispatch:
     inputs:
       test_id:
