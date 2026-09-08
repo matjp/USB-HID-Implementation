@@ -4,9 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'efi/**'
-    paths-ignore:
-      - '.github/workflows/build-efi.yml'
+      - 'efi/**
   workflow_dispatch:
     inputs:
       test_id:
@@ -52,11 +50,11 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v23' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v23.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V23 / HOST CONTROLLER RESET' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V23' }}
-      VERIFY2: ${{ inputs.verify2 || 'V23 COMPLETE' }}
+      TEST_ID: ${{ inputs.test_id || 'v24' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v24.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V24 / HALT THEN HOST CONTROLLER RESET' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V24' }}
+      VERIFY2: ${{ inputs.verify2 || 'V24 COMPLETE' }}
       VERIFY3: ${{ inputs.verify3 || 'NO DMA' }}
 
     steps:
