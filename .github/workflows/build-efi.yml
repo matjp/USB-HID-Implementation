@@ -42,7 +42,7 @@ on:
 
 concurrency:
   group: build-efi-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
