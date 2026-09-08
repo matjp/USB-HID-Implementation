@@ -84,10 +84,41 @@ EFI_STATUS efi_main(EFI_HANDLE image,EFI_SYSTEM_TABLE *st) {
     Print(u"INITIAL USBCMD=%08x USBSTS=%08x HCH=%u\r\n",
           cmd,status,status&STS_HCH?1:0);
 
+    /*
+     * V23 established that this machine can leave the controller running
+     * after the earlier tests. V26 therefore owns its halt transition
+     * instead of treating HCH=1 as an external precondition.
+     */
     if(!(status&STS_HCH)){
-        Print(u"PRECONDITION FAIL: CONTROLLER MUST BE HALTED\r\n");
-        done(reads,writes,EFI_NOT_READY);
-        return EFI_NOT_READY;
+        UINT32 halted_cmd = cmd & ~(CMD_RUN | CMD_INTE);
+        UINT32 poll_status = status;
+        UINT32 poll;
+        Print(u"HALTING: CLEAR RUN/INTERRUPT ENABLE BITS BEFORE INIT\\r\\n");
+        if(EFI_ERROR(mmio_write32(p,opbase,halted_cmd))){
+            Print(u"HALT WRITE FAIL\\r\\n");
+            result=EFI_DEVICE_ERROR;
+            goto out;
+        }
+        writes++;
+        for(poll=0;poll<100;poll++){
+            if(EFI_ERROR(mmio32(p,opbase+4,&poll_status))){
+                result=EFI_DEVICE_ERROR;
+                goto out;
+            }
+            reads++;
+            if(poll_status&STS_HCH) break;
+            uefi_call_wrapper(BS->Stall,1,1000);
+        }
+        if(!(poll_status&STS_HCH)){
+            Print(u"HALT TIMEOUT: USBSTS=%08x\\r\\n",poll_status);
+            result=EFI_TIMEOUT;
+            goto out;
+        }
+        status=poll_status;
+        cmd=halted_cmd;
+        Print(u"HALT COMPLETE USBSTS=%08x HCH=1\\r\\n",status);
+    } else {
+        Print(u"PRECONDITION: CONTROLLER ALREADY HALTED\\r\\n");
     }
 
     if(EFI_ERROR(mmio32(p,0x04,&hcs1))){
