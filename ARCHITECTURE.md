@@ -2,7 +2,11 @@
 
 ## Target
 
-Reasonably modern x86-64 PCs with UEFI and xHCI.
+Reasonably modern x86-64 PCs with UEFI and xHCI 1.0 or later. xHCI 0.x/0.96 controllers are explicitly unsupported.
+
+## xHCI compatibility boundary
+
+The bridge supports controllers reporting HCIVERSION >= 1.0. Controllers reporting an xHCI revision below 1.0 are rejected before controller initialization. The xHCI version establishes the minimum programming model; optional capabilities and later-version features remain capability-detected rather than assumed.
 
 ## Service boundary
 
