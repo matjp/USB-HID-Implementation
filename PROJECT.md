@@ -6,6 +6,10 @@ Last updated: 2026-09-09
 
 Build a simple x86-64 OS kernel targeting modern PCs with UEFI firmware. Immediate hardware goal: USB keyboard + USB mouse via a reusable xHCI service boundary. The kernel sees an abstract input interface, not USB/xHCI details. xHCI lives outside the kernel in a portable service with a platform abstraction layer.
 
+## Hardware milestone — V28/U20
+
+V28/U20 successfully validated the explicit UEFI→service HID handoff on the Toshiba Satellite P50. The controller reported xHCI 1.00 (8086:8C31), and UEFI discovered a single composite Microsoft USB device on port 4 exposing both supported HID interfaces: keyboard IF=0 / EP=0x81 and mouse IF=1 / EP=0x82. The handoff contained 2 devices and their report descriptors (75 and 223 bytes) and completed with no direct xHCI MMIO writes, no service DMA, and no port reset. This is the current read-only hardware baseline for the handoff design.
+
 ## Current direction
 
 - Target xHCI discovered via PCI class; hard compatibility boundary: xHCI 1.0 or later (HCIVERSION >= 1.0) only; xHCI 0.x/0.96 is explicitly unsupported. Fixed two-device scope (one external keyboard + one mouse).
