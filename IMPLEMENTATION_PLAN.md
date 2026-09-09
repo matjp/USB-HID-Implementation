@@ -25,7 +25,7 @@ Exit criteria:
 
 ## Gate 2 — UEFI HID handoff
 
-V28 validates the versioned UEFI -> service discovery snapshot before active xHCI reconfiguration. UEFI supplies controller identity/capabilities and only keyboard/mouse discovery facts. V28 is read-only with respect to xHCI MMIO and DMA.
+V28 validates the versioned UEFI -> service discovery snapshot before active xHCI reconfiguration. UEFI supplies controller identity/capabilities (including the capability/offset/page-size values needed by the service) and only keyboard/mouse discovery facts. V28 is read-only with respect to xHCI MMIO and DMA.
 
 Exit criteria:
 
