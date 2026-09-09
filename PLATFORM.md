@@ -1,5 +1,9 @@
 # Platform Facts
 
+## Project compatibility rule
+
+The project supports only xHCI controllers reporting HCIVERSION >= 1.0. xHCI 0.x/0.96 controllers are explicitly unsupported and must be rejected before controller initialization. This is a project-level compatibility boundary, not a claim that every later xHCI feature is available; optional capabilities remain capability-detected.
+
 This file contains observed platform facts and their evidence. It is not a list of assumptions. Unknown fields remain explicitly unknown until measured.
 
 ## Toshiba Satellite P50 — active xHCI test platform
@@ -9,7 +13,7 @@ Role: designated sacrificial machine for active xHCI experiments.
 | Property | Value | Evidence/status |
 | --- | --- | --- |
 | xHCI PCI function | 00:14.0, Intel 8086:8c31 | Observed by E002 |
-| xHCI version | 1.00 | Observed by E002 |
+| xHCI version | 1.00 | Observed by E002; meets project minimum >= 1.0 |
 | MMIO BAR | 0xF7C00000, 64-bit BAR encoding | Observed by E002 |
 | MaxSlots | 32 | Observed by E002 |
 | MaxInterrupters | 19 | Observed by E002 |
@@ -30,7 +34,7 @@ The Dell is a production dual-boot machine. It must not be used for active xHCI,
 | Property | Value | Evidence/status |
 | --- | --- | --- |
 | xHCI PCI function | 00:14.0, Intel 8086:7ae0 | E001 |
-| xHCI version | 1.20 | E001 |
+| xHCI version | 1.20 | E001; meets project minimum >= 1.0 |
 | MMIO BAR | 0x4202120000, 64 KiB, 64-bit | E001 |
 | MaxSlots / MaxInterrupters / MaxPorts | 64 / 8 / 25 | E001 |
 | AC64 | supported | E001 |
