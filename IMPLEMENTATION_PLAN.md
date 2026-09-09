@@ -4,11 +4,12 @@ Each gate has a narrow objective and explicit exit criteria. A failed or ambiguo
 
 ## Gate 0 — Evidence and platform baseline
 
-Reconcile the experiment history, retain the known-good read-only output, and complete the unknown Toshiba fields in `PLATFORM.md` that affect initialization: firmware, scratchpads, context size, legacy ownership, IOMMU state, external test keyboard, boot medium, and recovery procedure.
+Reject any controller reporting HCIVERSION < 1.0 before initialization. Reconcile the experiment history, retain the known-good read-only output, and complete the unknown Toshiba fields in `PLATFORM.md` that affect initialization: firmware, scratchpads, context size, legacy ownership, IOMMU state, external test keyboard, boot medium, and recovery procedure.
 
 Exit criteria:
 
 - The binary and machine used for each recorded active result are identifiable.
+- The controller reports HCIVERSION >= 1.0; older xHCI revisions are rejected before initialization.
 - The controller's required scratchpad count and addressing capability are known.
 - There is a documented, repeatable recovery procedure.
 
