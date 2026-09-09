@@ -1,126 +1,28 @@
 # Experiment Log
 
-## E001 — Read-only xHCI diagnostic on Dell XPS 8950
+## Current status
 
-Status: completed.
+- **E001 (Dell XPS 8950)**: Read-only diagnostic completed. Reports xHCI 1.20, 64 slots, 25 ports, controller was running. No writes performed.
+- **E002 (Toshiba Satellite P50)**: Read-only capability/DMA probe completed. Reports xHCI 1.00, 32 slots, 18 ports, controller running. Supported Protocol capability documented.
+- **E003–E004**: Read-only BAR/MIOM isolation tests planned but not yet executed.
+- **Historical series V03–V27**: Source implementations exist. V27 is a draft and must not be booted until reset ownership, scratchpad handling, DMA address translation, and teardown lifetime are reviewed and corrected.
 
-The GNU-EFI diagnostic successfully booted on the machine using read-only PCI/xHCI inspection and a compact screen-safe output format with an approximately 30-second delay before exit.
+## Recording rules
 
-Observed xHCI:
+An experiment is marked **completed** only when its result was observed on hardware and its output or a faithful transcript is retained. A source file or Git commit records implementation work, not a hardware result. Each active experiment must record its machine, boot medium, exact binary revision, preconditions, observed output, recovery action, and whether a power cycle was required.
 
-- PCI 00:14.0
-- Intel 8086:7ae0
-- 64 KiB 64-bit BAR at 0x4202120000
-- xHCI version 1.20
-- 64 slots
-- 8 interrupters
-- 25 ports
-- 64-bit addressing support
-- DBOFF 0x3000
-- RTSOFF 0x2000
-- extended capabilities begin at 0x8000
-- controller observed running
+## Project focus
 
-No intentional xHCI controller writes were performed.
+**Consolidation task**: Transform V24–V27 into one self-contained `xhci_bridge_init()` with a portable platform operations layer. The next experimental test (V28) runs this routine with **empty device hints** — halt → reset → CNR clear → capability validation → DMA allocation → DCBAA/command/event rings → readback → safe teardown — still issues no commands and touches no USB device.
 
-## E002 — Read-only xHCI capability/DMA probe on Toshiba Satellite P50
+**DMA safety**: Before any Run/Stop or DMA, investigate the Toshiba's IOMMU/VT-d state and UEFI DMA mapping behavior. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only.
 
-Status: completed.
-
-Purpose:
-
-- Re-discover the xHCI controller by PCI class rather than relying on a generation-specific device ID.
-- Record the 64-bit PCI BAR and actual assigned MMIO address.
-- Decode HCIVERSION, HCSPARAMS, HCCPARAMS1/2, AC64, context size, scratchpad count, doorbell/runtime offsets, and controller state.
-- Walk the xHCI extended-capability chain.
-- Identify Supported Protocol capabilities and their compatible port ranges.
-- Identify USB Legacy Support and USB Debug Capability locations without modifying them.
-
-Observed Toshiba controller:
-
-- PCI 00:14.0
-- Intel 8086:8c31
-- BAR base 0xF7C00000 (64-bit BAR encoding, but assigned address is below 4 GiB)
-- xHCI version 1.00
-- 32 slots
-- 19 interrupters
-- 18 ports
-- AC64=1
-- controller observed running
-- Supported Protocol capability reported the root-port range covering the controller's ports
-
-Safety:
-
-- PCI configuration was read-only.
-- xHCI MMIO accesses were read-only.
-- No controller reset, ownership change, DMA, rings, interrupts, or doorbell writes.
-
-Important verification note: the Supported Protocol capability's compatible port offset/count are in its third DWORD (capability offset + 0x08), not the preceding DWORD. This was checked against the xHCI specification before implementing E002.
-
-## E003 — One-MMIO-read isolation test on Toshiba Satellite P50
-
-Status: next test.
-
-Purpose:
-
-- Isolate the previously observed instability to the smallest possible MMIO operation.
-- Discover the xHCI controller by PCI class.
-- Read the PCI BAR through configuration space.
-- Perform exactly ONE read through EFI_PCI_IO_PROTOCOL.Mem.Read at BAR0 offset 0.
-- Decode only CAPLENGTH and HCIVERSION from that single DWORD.
-
-Safety boundary:
-
-- No PCI configuration writes.
-- No xHCI MMIO writes.
-- No operational-register reads.
-- No port-status reads.
-- No extended-capability reads.
-- No DMA, rings, interrupts, controller reset, or ownership changes.
-- No direct CPU pointer dereference of the BAR.
-- 30-second exit delay.
-
-Rationale:
-
-The previous successful Toshiba diagnostics establish that PCI discovery and configuration-space reads work. This experiment deliberately avoids all operational/port/extended MMIO reads so that a failure can be attributed specifically to the first MMIO access path. The EFI PCI I/O protocol is used for the MMIO access rather than directly dereferencing the physical BAR address.
-
-Expected Toshiba result if the MMIO path is healthy:
-
-- PCI 00:14.0 / 8086:8c31
-- BAR base 0xF7C00000
-- MMIO[000] should encode a plausible xHCI CAPLENGTH and HCIVERSION, consistent with the earlier E002 observation (CAPLENGTH 0x80, version 0x0100).
-
-## E004 — PCI BAR attribute isolation test on Toshiba Satellite P50
-
-Status: next test.
-
-Purpose:
-
-- Determine how the UEFI PCI I/O layer classifies BAR0 without performing any xHCI MMIO read.
-- Compare the raw PCI configuration-space BAR encoding with EFI_PCI_IO_PROTOCOL.GetBarAttributes().
-- Query the current PCI I/O controller attributes without changing them.
-
-Test operations:
-
-- Discover xHCI by PCI class 0c:03:30.
-- Read PCI config space only: vendor/device, class code, BAR0/BAR1.
-- Call GetBarAttributes(BAR0) requesting only the Supports mask; Resources is NULL.
-- Call Attributes(Get) to report the current PCI I/O attributes.
-- No Mem.Read, Mem.Write, Pci.Write, SetBarAttributes, DMA, reset, rings, interrupts, or doorbells.
-- 30-second exit delay.
-
-The UEFI specification defines GetBarAttributes() as a query of BAR attributes/resources; its Supports result distinguishes 32-bit versus 64-bit BAR capability. Attributes(Get) retrieves current attributes without requesting a state change. citeturn3search0turn3search14
-
-Expected Toshiba result:
-
-- PCI 00:14.0 / 8086:8c31
-- BAR0 raw value 0xF7C00004 and BAR1 0x00000000
-- BAR type 64-bit
-- BAR attribute query should report 64-bit support if the firmware represents the BAR accordingly
-- PCI memory-space attribute should normally be enabled if the controller is already operating
-
-This experiment is intentionally between PCI configuration probing and MMIO. If E004 succeeds while E003 fails, the evidence points specifically at the EFI MMIO access path rather than PCI enumeration or BAR interpretation.
+**Fixed two-device bring-up**: Use a versioned `known_hid_device` snapshot from UEFI to reset the known root port, enable Slot, Address Device, and Configure Endpoint while keeping the scope to keyboard and mouse only. No hubs, hot-plug, or arbitrary descriptors.
 
 ## Safety rule
 
 Any experiment that starts/configures xHCI DMA should be performed on sacrificial hardware first.
+
+## Platform for future work
+
+- E003–E004 (read-only MMIO BAR tests) are intentionally between PCI configuration probing and MMIO. If they succeed while E003 fails, the evidence points at the EFI MMIO access path rather than PCI enumeration or BAR interpretation.
