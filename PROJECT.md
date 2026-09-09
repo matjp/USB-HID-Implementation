@@ -8,7 +8,7 @@ Build a simple x86-64 OS kernel targeting modern PCs with UEFI firmware. Immedia
 
 ## Current direction
 
-- Target xHCI discovered via PCI class; fixed two-device scope (one external keyboard + one mouse).
+- Target xHCI discovered via PCI class; hard compatibility boundary: xHCI 1.0 or later (HCIVERSION >= 1.0) only; xHCI 0.x/0.96 is explicitly unsupported. Fixed two-device scope (one external keyboard + one mouse).
 - Prefer HID boot protocol; no hubs, hot-plug, arbitrary descriptors, or arbitrary HID report parsing.
 - UEFI performs device enumeration and passes a small device-template snapshot to the bridge; the bridge never inherits live UEFI xHCI state.
 - Portable xHCI bridge core with platform ops layer: GNU-EFI test now, UEFI bridge later, kernel later if chosen.
