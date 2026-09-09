@@ -1,5 +1,6 @@
 name: Build EFI Test
 # V28 is the default discovery-handoff test; push-triggered builds use the V28 defaults.
+# V28 compatibility header is maintained under efi/usb_io_compat.h.
 
 on:
   workflow_dispatch:
