@@ -89,7 +89,6 @@ typedef struct {
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
 static EFI_GUID UsbIoGuid = EFI_USB_IO_PROTOCOL_GUID;
-static EFI_GUID DevicePathGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
 
 static EFI_STATUS cfg32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v)
 {
@@ -202,7 +201,7 @@ static void finish(EFI_STATUS s, UINTN usb_handles, UINTN hid_candidates,
     Print(u"USB I/O HANDLES=%u HID CANDIDATES=%u HANDOFF DEVICES=%u\r\n",
           usb_handles, hid_candidates, devices);
     Print(u"RESULT: %r\r\n", s);
-    Print(u"NO xHCI MMIO WRITES / NO DMA / NO PORT RESET / NO XHCI RECONFIGURATION\r\n");
+    Print(u"NO DIRECT xHCI MMIO WRITES / NO SERVICE DMA / NO PORT RESET / UEFI-ONLY USB DISCOVERY\r\n");
     Print(u"EXIT 5 SEC...\r\n");
     uefi_call_wrapper(BS->Stall, 1, 5000000);
 }
@@ -318,7 +317,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         goto validate;
     }
 
-    for (i = 0; i < usb_count && handoff.device_count < HANDOFF_MAX_DEVICES; ++i) {
+    for (i = 0; i < usb_count; ++i) {
         EFI_USB_IO_PROTOCOL *usb = NULL;
         EFI_USB_DEVICE_DESCRIPTOR dd;
         EFI_USB_CONFIG_DESCRIPTOR cd;
@@ -343,6 +342,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             continue;
 
         ++hid_candidates;
+        if (handoff.device_count >= HANDOFF_MAX_DEVICES) {
+            Print(u"HANDOFF FAIL: MORE THAN %u KEYBOARD/MOUSE DEVICES\r\n", HANDOFF_MAX_DEVICES);
+            s = EFI_BAD_BUFFER_SIZE;
+            goto validate;
+        }
         d = &handoff.devices[handoff.device_count];
         uefi_call_wrapper(BS->SetMem, 3, d, sizeof(*d), 0);
         d->kind = kind;
@@ -363,7 +367,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             d->configuration_value = cd.ConfigurationValue;
 
         if (!EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, usb_handles[i],
-                                          &DevicePathGuid, (void **)&path,
+                                          &DevicePathProtocol, (void **)&path,
                                           image, NULL,
                                           EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
             d->root_port = find_root_port(path);
