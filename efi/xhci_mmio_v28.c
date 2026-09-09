@@ -1,7 +1,7 @@
 #include <efi.h>
 #include <efilib.h>
 #include <efipciio.h>
-#include <efiusbio.h>
+#include "usb_io_compat.h"
 
 #define XHCI_MIN_VERSION       0x0100U
 #define XHCI_CLASS             0x0c
