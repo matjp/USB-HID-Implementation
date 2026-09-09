@@ -1,4 +1,5 @@
 name: Build EFI Test
+# V28 is the default discovery-handoff test; push-triggered builds use the V28 defaults.
 
 on:
   workflow_dispatch:
