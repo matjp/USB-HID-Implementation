@@ -11,6 +11,9 @@ All active and future controller experiments in this project require HCIVERSION 
 - **E003–E004**: Read-only BAR/MIOM isolation tests planned but not yet executed.
 - **Historical series V03–V27**: Source implementations exist. V27 is a draft and must not be booted until reset ownership, scratchpad handling, DMA address translation, and teardown lifetime are reviewed and corrected.
 
+
+- **U20 (Toshiba Satellite P50)**: V28/U20 UEFI→service HID handoff validation completed successfully. Controller reports xHCI 1.00, PCI 8086:8C31, BAR 0xF7C00000, OPBASE 0xB0; capabilities: 32 slots, 8 interrupters, 19 ports, AC64=1, HIGH=1, CNR=0. One physical Microsoft VID 045E/PID 07B2 composite USB device on port 4 exposed two supported HID interfaces: keyboard IF=0, EP=0x81, MPS=8, interval=4, report descriptor 75 bytes; mouse IF=1, EP=0x82, MPS=10, interval=1, report descriptor 223 bytes. UEFI reported 6 USB I/O handles, 2 HID candidates, 2 handoff devices. Handoff magic=0x48494458, version=1, size=744. Result: Success. No direct xHCI MMIO writes, no service DMA, no port reset; discovery remained UEFI-only. This validates the UEFI→service discovery boundary and keyboard/mouse-only filtering on the Toshiba.
+
 ## Recording rules
 
 An experiment is marked **completed** only when its result was observed on hardware and its output or a faithful transcript is retained. A source file or Git commit records implementation work, not a hardware result. Each active experiment must record its machine, boot medium, exact binary revision, preconditions, observed output, recovery action, and whether a power cycle was required.
