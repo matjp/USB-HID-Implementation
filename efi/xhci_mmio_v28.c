@@ -70,7 +70,7 @@ typedef struct {
     UINT32 rtsoff;
     UINT32 pagesize;
     UINT8  max_slots;
-    UINT8  max_interrupters;
+    UINT16 max_interrupters;
     UINT8  max_ports;
     UINT8  dma_ac64;
     UINT8  controller_halted;
@@ -160,7 +160,7 @@ static EFI_STATUS get_report_descriptor(EFI_USB_IO_PROTOCOL *usb,
                                         UINTN *actual)
 {
     EFI_USB_DEVICE_REQUEST req;
-    UINT8 hid_desc[9];
+    UINT8 hid_desc[64];
     UINT16 report_size;
     UINT32 usb_status = 0;
     EFI_STATUS s;
@@ -170,7 +170,7 @@ static EFI_STATUS get_report_descriptor(EFI_USB_IO_PROTOCOL *usb,
     req.Request = 0x06;           /* GET_DESCRIPTOR */
     req.Value = 0x2100;            /* HID descriptor */
     req.Index = interface_number;
-    req.Length = sizeof(hid_desc);
+    req.Length = 9;
 
     s = uefi_call_wrapper(usb->UsbControlTransfer, 7, usb, &req,
                           EfiUsbDataIn, 1000, hid_desc, sizeof(hid_desc),
@@ -178,7 +178,7 @@ static EFI_STATUS get_report_descriptor(EFI_USB_IO_PROTOCOL *usb,
     if (EFI_ERROR(s) || hid_desc[1] != 0x21 || hid_desc[0] < 9)
         return EFI_NOT_FOUND;
 
-    report_size = (UINT16)hid_desc[7] | ((UINT16)hid_desc[8] << 8);
+    { UINTN off; BOOLEAN found = FALSE; UINTN hid_len = hid_desc[0]; if (hid_len > sizeof(hid_desc)) hid_len = sizeof(hid_desc); for (off = 6; off + 3 <= hid_len; off += 3) { UINT8 dtype = hid_desc[off]; UINT16 dlen = (UINT16)hid_desc[off + 1] | ((UINT16)hid_desc[off + 2] << 8); if (dtype == 0x22) { report_size = dlen; found = TRUE; break; } } if (!found) return EFI_NOT_FOUND; }
     if (report_size > capacity)
         report_size = (UINT16)capacity;
 
@@ -261,7 +261,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     cfg32(pci, 0x10, &bar0);
     cfg32(pci, 0x14, &bar1);
-    handoff.mmio_base = ((UINT64)bar1 << 32) | ((UINT64)bar0 & ~0xFULL);
+    if ((bar0 & 0x1U) || ((bar0 >> 1) & 0x3U) == 0x1U) { s = EFI_UNSUPPORTED; goto done; }
+    if (((bar0 >> 1) & 0x3U) == 0x2U) { if (EFI_ERROR(cfg32(pci, 0x14, &bar1))) { s = EFI_DEVICE_ERROR; goto done; } handoff.mmio_base = ((UINT64)bar1 << 32) | ((UINT64)bar0 & ~0xFULL); } else { handoff.mmio_base = (UINT64)(bar0 & ~0xFULL); }
+    if (handoff.mmio_base == 0) { s = EFI_DEVICE_ERROR; goto done; }
     handoff.pci_vendor = (UINT16)(id & 0xffffU);
     handoff.pci_device = (UINT16)(id >> 16);
 
@@ -304,7 +306,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     handoff.rtsoff = rtsoff & ~0x1fU;
     handoff.pagesize = pagesize;
     handoff.max_slots = (UINT8)(hcs1 & 0xffU);
-    handoff.max_interrupters = (UINT8)(((hcs1 >> 8) & 0x7ffU) + 1U);
+    handoff.max_interrupters = (UINT16)((hcs1 >> 8) & 0x7ffU);
     handoff.max_ports = (UINT8)((hcs1 >> 24) & 0xffU);
     handoff.dma_ac64 = (hcc1 & 1U) ? 1 : 0;
     handoff.controller_halted = (status & XHCI_STS_HCH) ? 1 : 0;
@@ -396,6 +398,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             d->endpoints[ep_i].max_packet_size = ep.MaxPacketSize;
             d->endpoints[ep_i].interval = ep.Interval;
 
+            if (ep.DescriptorType != 0x05 || ep.Length < 7 || ep.MaxPacketSize == 0 || ep.Interval == 0)
+                continue;
             if ((ep.EndpointAddress & 0x80U) &&
                 ((ep.Attributes & 0x03U) == 0x03U) && !got_in) {
                 d->interrupt_in_endpoint = ep.EndpointAddress;
