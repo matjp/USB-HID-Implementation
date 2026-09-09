@@ -5,6 +5,12 @@
 - [ ] Reject xHCI controllers with HCIVERSION < 1.0 before any controller initialization.
 - [ ] Keep optional/later xHCI features capability-detected rather than inferred solely from version.
 
+## UEFI -> service handoff
+
+- [ ] Freeze the versioned keyboard/mouse-only handoff ABI after V28 review.
+- [ ] Define how the service receives the handoff after ExitBootServices.
+- [ ] Define ownership semantics for any UEFI-created resources; default is no live xHCI resource inheritance.
+
 ## Consolidation (current)
 
 - [ ] Consolidate V20–V27 into one self-contained xhci_bridge_init() with a portable platform operations layer.
