@@ -15,6 +15,8 @@ All active and future controller experiments in this project require HCIVERSION 
 
 An experiment is marked **completed** only when its result was observed on hardware and its output or a faithful transcript is retained. A source file or Git commit records implementation work, not a hardware result. Each active experiment must record its machine, boot medium, exact binary revision, preconditions, observed output, recovery action, and whether a power cycle was required.
 
+- **V28**: UEFI -> service HID handoff discovery test added. V28 is read-only: no xHCI MMIO writes, no DMA allocation, no port reset, no xHCI ring setup.
+
 ## Project focus
 
 **Consolidation task**: Transform V24–V27 into one self-contained `xhci_bridge_init()` with a portable platform operations layer. The next experimental test (V28) runs this routine with **empty device hints** — halt → reset → CNR clear → capability validation → DMA allocation → DCBAA/command/event rings → readback → safe teardown — still issues no commands and touches no USB device.
