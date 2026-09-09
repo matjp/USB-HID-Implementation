@@ -23,7 +23,20 @@ Exit criteria:
 - Buffer memory remains live until controller references are cleared or a reset makes them invalid.
 - No test uses the Dell for DMA work.
 
-## Gate 2 — Halted initialization preparation
+## Gate 2 — UEFI HID handoff
+
+V28 validates the versioned UEFI -> service discovery snapshot before active xHCI reconfiguration. UEFI supplies controller identity/capabilities and only keyboard/mouse discovery facts. V28 is read-only with respect to xHCI MMIO and DMA.
+
+Exit criteria:
+
+- HCIVERSION >= 1.0 is enforced.
+- Handoff magic, version, size and two-device bound validate.
+- Only boot-protocol HID keyboard/mouse interfaces enter the handoff.
+- Non-keyboard/mouse USB handles are excluded.
+- Retained devices have an interrupt-IN endpoint.
+- UEFI-created live xHCI resources are not inherited.
+
+## Gate 3 — Halted initialization preparation
 
 Replace the draft V27 with one self-contained test:
 
@@ -37,7 +50,7 @@ Exit criteria:
 - The controller remains halted and ready.
 - Teardown clears every controller reference before memory is released.
 
-## Gate 3 — Controller start without commands
+## Gate 4 — Controller start without commands
 
 Retain valid ring memory, enable only the required event-ring state, start the controller, and observe that it reaches the expected running state. Do not submit a command, ring a doorbell, or enable CPU interrupt delivery.
 
@@ -47,7 +60,7 @@ Exit criteria:
 - The event-ring and DMA lifetime model remains valid while running.
 - Halt/reset recovery is repeatable.
 
-## Gate 4 — Command-ring completion by polling
+## Gate 5 — Command-ring completion by polling
 
 Submit one Enable Slot command and poll the event ring for its completion. Keep CPU interrupt delivery disabled; polling isolates event-ring correctness from interrupt routing.
 
@@ -57,7 +70,7 @@ Exit criteria:
 - Event dequeue acknowledgement works.
 - The controller remains healthy after recovery.
 
-## Gate 5 — One pre-connected wired keyboard
+## Gate 6 — One pre-connected wired keyboard
 
 Use a single external wired keyboard connected before boot. Implement root-port identification/reset, Address Device, device and configuration descriptor retrieval, HID boot-interface selection, Set Configuration, and Set Protocol.
 
@@ -66,7 +79,7 @@ Exit criteria:
 - Descriptors are decoded from the intended device.
 - The selected HID interface is demonstrably boot-protocol capable.
 
-## Gate 6 — Keyboard reports, then mouse
+## Gate 7 — Keyboard reports, then mouse
 
 Create an interrupt-IN transfer ring and initially poll the event ring for reports. Translate boot-keyboard reports into a small internal event queue. Add boot-mouse handling only after keyboard operation is stable.
 
@@ -75,7 +88,7 @@ Exit criteria:
 - Keyboard make, break, modifier, and rollover behaviour is recorded and correct.
 - Mouse support does not change the keyboard path's behaviour.
 
-## Gate 7 — OS integration and portability
+## Gate 8 — OS integration and portability
 
 Implement the execution model described in `ARCHITECTURE.md`: controller ownership, startup/shutdown across `ExitBootServices`, the USB-service lifetime, the input-event ABI, queue ownership, and backpressure. Only then expand testing to additional hardware, USB 3 devices, and hubs.
 
