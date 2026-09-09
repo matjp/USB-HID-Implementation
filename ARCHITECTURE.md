@@ -21,6 +21,12 @@ UEFI performs device enumeration and passes a small device-template snapshot to 
 
 The service exposes a deliberately small ABI to the kernel. The exact IPC mechanism is TBD.
 
+## UEFI -> service handoff
+
+UEFI is the authoritative discovery provider for the fixed keyboard/mouse scope. The handoff is versioned and bounded to two devices. It contains xHCI identity/capability facts plus, for each retained boot-protocol HID keyboard or mouse, root port when derivable, VID/PID, configuration value, interface number/protocol, interrupt-IN endpoint, endpoint descriptors, and the HID report descriptor when retrievable. Non-keyboard/mouse USB devices are excluded.
+
+The handoff is a discovery snapshot only. It does not transfer ownership of UEFI-created rings, contexts, DMA buffers, slot IDs, device addresses, or controller run state. The service must establish ownership and safety-critical xHCI state itself.
+
 ## xHCI bridge design
 
 ```text
