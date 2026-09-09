@@ -1,5 +1,10 @@
 # TODO
 
+## Compatibility
+
+- [ ] Reject xHCI controllers with HCIVERSION < 1.0 before any controller initialization.
+- [ ] Keep optional/later xHCI features capability-detected rather than inferred solely from version.
+
 ## Consolidation (current)
 
 - [ ] Consolidate V20–V27 into one self-contained xhci_bridge_init() with a portable platform operations layer.
