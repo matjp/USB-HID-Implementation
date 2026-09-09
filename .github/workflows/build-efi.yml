@@ -53,7 +53,7 @@ jobs:
       LABEL: ${{ inputs.label || 'xHCI V28 / UEFI HID HANDOFF DISCOVERY' }}
       VERIFY1: ${{ inputs.verify1 || 'xHCI V28' }}
       VERIFY2: ${{ inputs.verify2 || 'V28 COMPLETE' }}
-      VERIFY3: ${{ inputs.verify3 || 'NO DMA' }}
+      VERIFY3: ${{ inputs.verify3 || 'NO SERVICE DMA' }}
 
     steps:
       - uses: actions/checkout@v4
