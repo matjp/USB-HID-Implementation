@@ -1,5 +1,9 @@
 # Experiment Log
 
+## Compatibility boundary
+
+All active and future controller experiments in this project require HCIVERSION >= 1.0. xHCI 0.x/0.96 controllers are explicitly unsupported and must be rejected before any controller initialization or active experiment.
+
 ## Current status
 
 - **E001 (Dell XPS 8950)**: Read-only diagnostic completed. Reports xHCI 1.20, 64 slots, 25 ports, controller was running. No writes performed.
