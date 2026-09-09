@@ -33,7 +33,7 @@ on:
       verify3:
         description: "Third string to require"
         required: true
-        default: "NO DMA"
+        default: "NO SERVICE DMA"
         type: string
 
 concurrency:
@@ -111,9 +111,14 @@ jobs:
           objcopy -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym             -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc             --output-target=efi-app-x86_64 --subsystem=10             "build/$TEST_ID/BOOTX64-$TEST_ID.elf" "build/$TEST_ID/BOOTX64.EFI"
           file "build/$TEST_ID/BOOTX64.EFI"
           objdump -h "build/$TEST_ID/BOOTX64.EFI"
-          strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$VERIFY1"
-          strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$VERIFY2"
-          strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$VERIFY3"
+          for marker in "$VERIFY1" "$VERIFY2" "$VERIFY3"; do
+            if ! strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$marker"; then
+              echo "ERROR: required EFI marker not found: [$marker]" >&2
+              echo "Embedded wide-string markers:" >&2
+              strings -el "build/$TEST_ID/BOOTX64.EFI" | sed -n '/V28/,+8p' >&2 || true
+              exit 1
+            fi
+          done
           test -s "build/$TEST_ID/BOOTX64.EFI"
 
       - name: Prepare artifact
