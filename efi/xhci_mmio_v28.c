@@ -64,7 +64,11 @@ typedef struct {
     UINT64 mmio_base;
     UINT32 hcsparams1;
     UINT32 hcsparams2;
+    UINT32 hcsparams3;
     UINT32 hccparams1;
+    UINT32 dboff;
+    UINT32 rtsoff;
+    UINT32 pagesize;
     UINT8  max_slots;
     UINT8  max_interrupters;
     UINT8  max_ports;
@@ -213,7 +217,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     EFI_PCI_IO_PROTOCOL *pci = NULL;
     UINTN pci_count = 0, usb_count = 0, i;
     UINT32 id = 0, cls = 0, bar0 = 0, bar1 = 0;
-    UINT32 cap0 = 0, hcs1 = 0, hcs2 = 0, hcc1 = 0, status = 0;
+    UINT32 cap0 = 0, hcs1 = 0, hcs2 = 0, hcs3 = 0, hcc1 = 0, dboff = 0, rtsoff = 0, status = 0, pagesize = 0;
     UINT32 opbase;
     UINT16 version;
     XHCI_HANDOFF handoff;
@@ -282,7 +286,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     if (EFI_ERROR(mmio32(pci, 0x04, &hcs1)) ||
         EFI_ERROR(mmio32(pci, 0x08, &hcs2)) ||
+        EFI_ERROR(mmio32(pci, 0x0c, &hcs3)) ||
         EFI_ERROR(mmio32(pci, 0x10, &hcc1)) ||
+        EFI_ERROR(mmio32(pci, 0x14, &dboff)) ||
+        EFI_ERROR(mmio32(pci, 0x18, &rtsoff)) ||
+        EFI_ERROR(mmio32(pci, opbase + 0x08, &pagesize)) ||
         EFI_ERROR(mmio32(pci, opbase + 0x04, &status))) {
         s = EFI_DEVICE_ERROR;
         goto done;
@@ -290,7 +298,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     handoff.hcsparams1 = hcs1;
     handoff.hcsparams2 = hcs2;
+    handoff.hcsparams3 = hcs3;
     handoff.hccparams1 = hcc1;
+    handoff.dboff = dboff & ~0x3U;
+    handoff.rtsoff = rtsoff & ~0x1fU;
+    handoff.pagesize = pagesize;
     handoff.max_slots = (UINT8)(hcs1 & 0xffU);
     handoff.max_interrupters = (UINT8)(((hcs1 >> 8) & 0x7ffU) + 1U);
     handoff.max_ports = (UINT8)((hcs1 >> 24) & 0xffU);
