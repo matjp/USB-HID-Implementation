@@ -42,3 +42,8 @@ The first `xhci_bridge_init()` test runs with zero device hints — full control
 The project has a hard compatibility boundary at xHCI 1.0. A controller is supported only when its HCIVERSION is >= 1.0. xHCI 0.x/0.96 controllers are explicitly unsupported and must be rejected before controller initialization.
 
 This boundary removes the legacy 0.96 compatibility path from the project while retaining capability discovery for optional features and later xHCI revisions. The xHCI specification is the normative baseline; Linux, coreboot/libpayload, and EDK2 are implementation cross-references only.
+
+
+## D011 — UEFI is the authoritative keyboard/mouse discovery provider
+
+The service shall consume the maximum useful keyboard/mouse discovery information supplied by UEFI and shall not receive a general USB-device inventory. Only boot-protocol HID keyboard and mouse interfaces enter the handoff. The handoff is a versioned discovery snapshot, not a transfer of ownership of UEFI-created xHCI rings, contexts, DMA buffers, slot IDs, or live controller state.
