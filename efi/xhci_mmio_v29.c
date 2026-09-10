@@ -258,16 +258,24 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
            guarantees PAGESIZE alignment for every buffer without adding a
            general-purpose aligned allocator to this minimal test. */
         scratch_alloc_pages=xhci_pagesize/4096U;
-        scratch_block_pages=scratchpads*scratch_alloc_pages;
+        /* Over-allocate so we can choose a PAGESIZE-aligned subrange in the
+           DMA address space. EFI page allocation guarantees only 4 KiB
+           alignment; xHCI PAGESIZE may be larger. */
+        scratch_block_pages=scratchpads*scratch_alloc_pages+scratch_alloc_pages-1U;
         s=dma_alloc(p,scratch_block_pages,&scratch_block,&scratch_block_dev,&scratch_block_map);
         if(EFI_ERROR(s)) goto teardown;
+        {
+            UINT64 aligned_dev=(scratch_block_dev+(UINT64)xhci_pagesize-1ULL) &
+                               ~((UINT64)xhci_pagesize-1ULL);
+            UINTN delta=(UINTN)(aligned_dev-scratch_block_dev);
+            scratch_block=(UINT8*)scratch_block+delta;
+            scratch_block_dev=aligned_dev;
+        }
         /* xHCI requires each scratchpad buffer to be cleared before Run.
            This test never enters Run, but establish the required invariant
            now without touching the buffers after handoff to the controller. */
-        uefi_call_wrapper(BS->SetMem,3,scratch_block,scratch_block_pages*4096U,0);
-        if((scratch_block_dev & ((UINT64)xhci_pagesize-1ULL)) != 0) {
-            s=EFI_BAD_BUFFER_SIZE; goto teardown;
-        }
+        uefi_call_wrapper(BS->SetMem,3,scratch_block,
+                          scratchpads*xhci_pagesize,0);
         if(!ac64 && scratch_block_dev +
             (UINT64)scratchpads*xhci_pagesize - 1ULL > 0xffffffffULL) {
             s=EFI_BAD_BUFFER_SIZE; goto teardown;
