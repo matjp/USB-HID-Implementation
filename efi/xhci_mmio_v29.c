@@ -337,8 +337,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) goto teardown;
     writes++;
 
-    if(EFI_ERROR(mmio64_split(p,rtsoff+0x20+0x10,&erstba_rd)) ||
-       EFI_ERROR(mmio64_split(p,rtsoff+0x20+0x18,&erdp_rd))) { s=EFI_DEVICE_ERROR; goto teardown; }
+    s=mmio64_split(p,rtsoff+0x20+0x10,&erstba_rd);
+    if(EFI_ERROR(s)) { Print(L"READBACK ERSTBA FAIL\\r\\n"); goto teardown; }
+    reads += 2;
+    Print(L"READBACK ERSTBA PASS\\r\\n");
+    s=mmio64_split(p,rtsoff+0x20+0x18,&erdp_rd);
+    if(EFI_ERROR(s)) { Print(L"READBACK ERDP FAIL\\r\\n"); goto teardown; }
+    reads += 2;
+    Print(L"READBACK ERDP PASS\\r\\n");
     reads+=2;
     if((erstba_rd&ERST_ADDR_MASK)!=(erst_dev&ERST_ADDR_MASK) ||
        (erdp_rd&ERDP_ADDR_MASK)!=(event_dev&ERDP_ADDR_MASK)) { s=EFI_DEVICE_ERROR; goto teardown; }
