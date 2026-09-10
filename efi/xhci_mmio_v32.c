@@ -154,7 +154,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  UINT32 portsc=0,speed=0,slot=0,event_idx=0,event_type=0,cc=0,ed0=0,ed1=0,ed2=0,ed3=0; UINT64 eptr=0;
  UINTN shift=0,xpage=0,ctx_bytes=0,input_bytes=0,spa_pages=1; BOOLEAN halted=FALSE,started=FALSE,dma_live=FALSE,stype_found=FALSE;
  struct dma_obj dcbaa_d={0},spa_d={0},cr_d={0},ev_d={0},erst_d={0},devctx_d={0},inctx_d={0},ep0_d={0}; struct dma_obj *sb=NULL;
- UINT64 *dcbaa=NULL,*spa=NULL,*erst=NULL; UINT32 *cr=NULL,*ev=NULL; UINT8 *devctx=NULL,*inctx=NULL;
+ UINT64 *dcbaa=NULL,*spa=NULL,*erst=NULL; UINT32 *cr=NULL,*ev=NULL; UINT8 *inctx=NULL;
  UINT32 port_off;
 
  InitializeLib(image,st);
@@ -174,7 +174,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  maxslots=hcs1&255U; scratchpads=(((hcs2>>21)&31U)<<5)|((hcs2>>27)&31U); ctxsz=(hcc&CTX_CSZ)?64:32;
  if(!(hcc&HCC_AC64)){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"AC64",s);goto out;}
  s=mr32(p,op+8,&ps);reads++;if(EFI_ERROR(s)||!ps){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGESIZE",s);goto out;}
- while(shift<32 && !(ps&(1U<<shift))) shift++; if(shift>=32){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE BIT",s);goto out;} xpage=(UINTN)1U<<(12+shift); if(xpage!=4096U){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE SIZE",s);goto out;}
+ while(shift<32 && !(ps&(1U<<shift))) {
+  shift++;
+ }
+ if(shift>=32){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE BIT",s);goto out;}
+ xpage=(UINTN)1U<<(12+shift);
+ if(xpage!=4096U){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE SIZE",s);goto out;}
  if(!maxslots||scratchpads>MAX_SCRATCHPADS){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"LIMITS",s);goto out;}
  Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u AC64=1 PAGESIZE=%u CONTEXT=%u HCH=%u CNR=%u\r\n",maxslots,scratchpads,(UINT32)xpage,ctxsz,(status&STS_HCH)?1:0,(status&STS_CNR)?1:0);
  s=mr32(p,0x14,&db);reads++;if(EFI_ERROR(s)){remember_fail(u"CAPS",u"DBOFF",s);goto out;}db&=~3U;
@@ -197,7 +202,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  s=dma_alloc(p,1,&ep0_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"EP0 RING",s);goto out;}dma_live=TRUE;
  if((dcbaa_d.dev&63)||(devctx_d.dev&63)||(inctx_d.dev&63)||(ep0_d.dev&15)){s=EFI_BAD_BUFFER_SIZE;remember_fail(u"DMA",u"ALIGNMENT",s);goto out;}
  if(scratchpads){s=uefi_call_wrapper(BS->AllocatePool,3,EfiBootServicesData,scratchpads*sizeof(struct dma_obj),(void**)&sb);if(EFI_ERROR(s)){remember_fail(u"DMA",u"SCRATCH DESCRIPTORS",s);goto out;}uefi_call_wrapper(BS->SetMem,3,sb,scratchpads*sizeof(struct dma_obj),0);for(i=0;i<scratchpads;i++){s=dma_alloc(p,1,&sb[i]);if(EFI_ERROR(s)){remember_fail(u"DMA",u"SCRATCHPAD",s);goto out;}}}
- dcbaa=(UINT64*)dcbaa_d.host;spa=(UINT64*)spa_d.host;cr=(UINT32*)cr_d.host;ev=(UINT32*)ev_d.host;erst=(UINT64*)erst_d.host;devctx=(UINT8*)devctx_d.host;inctx=(UINT8*)inctx_d.host;
+ dcbaa=(UINT64*)dcbaa_d.host;spa=(UINT64*)spa_d.host;cr=(UINT32*)cr_d.host;ev=(UINT32*)ev_d.host;erst=(UINT64*)erst_d.host;inctx=(UINT8*)inctx_d.host;
  if(scratchpads){dcbaa[0]=spa_d.dev;for(i=0;i<scratchpads;i++)spa[i]=sb[i].dev;}
  cr[CMD_TRBS*4-4]=(UINT32)cr_d.dev;cr[CMD_TRBS*4-3]=(UINT32)(cr_d.dev>>32);cr[CMD_TRBS*4-2]=0;cr[CMD_TRBS*4-1]=TRB_CYCLE|TRB_LINK_TOGGLE|(TRB_LINK<<TRB_TYPE_SHIFT);
  erst[0]=ev_d.dev;erst[1]=0;erst[2]=EVENT_TRBS;erst[3]=0;
