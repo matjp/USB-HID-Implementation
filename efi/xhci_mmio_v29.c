@@ -257,8 +257,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
        toggles cycle state at the segment boundary. */
     {
         UINT32 *link=(UINT32*)((UINT8*)common+(crcr_dev-common_dev)+4080U);
-        link[0]=0;
-        link[1]=0;
+        link[0]=(UINT32)(crcr_dev & 0xffffffffULL);
+        link[1]=(UINT32)(crcr_dev >> 32);
         link[2]=TRB_LINK_TYPE;
         link[3]=TRB_LINK_TOGGLE;
     }
