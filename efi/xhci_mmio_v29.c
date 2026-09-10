@@ -12,7 +12,8 @@
 #define CRCR_ADDR_MASK 0xffffffffffffffc0ULL
 #define ERST_ADDR_MASK 0xffffffffffffffc0ULL
 #define ERDP_ADDR_MASK 0xfffffffffffffff0ULL
-#define ERDP_DCS   0x1ULL
+#define TRB_LINK_TYPE (6U<<10)
+#define TRB_LINK_TOGGLE (1U<<1)
 #define MAX_SCRATCHPADS 1024U
 #define COMMON_PAGES 4U
 #define DCBAA_BYTES 0x800U
@@ -219,7 +220,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     crcr_dev=spa_dev+spa_pages*xhci_pagesize;
     event_dev=crcr_dev+4096U;
     erst_dev=event_dev+8192U;
-    if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL) ||
+    if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&63ULL)||(erst_dev&63ULL) ||
        (!ac64 && (
            dcbaa_dev > 0xffffffffULL ||
            dcbaa_dev + (UINT64)dcbaa_pages * 4096ULL - 1ULL > 0xffffffffULL ||
@@ -251,7 +252,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     }
 
 
-    ((UINT32*)common)[0]=0;
+    /* A command ring is a producer ring and therefore has a Link TRB at the
+       end of each segment.  With one segment it links back to itself and
+       toggles cycle state at the segment boundary. */
+    {
+        UINT32 *link=(UINT32*)((UINT8*)common+(crcr_dev-common_dev)+4080U);
+        link[0]=0;
+        link[1]=0;
+        link[2]=TRB_LINK_TYPE;
+        link[3]=TRB_LINK_TOGGLE;
+    }
+
     ((UINT64*)((UINT8*)common+(erst_dev-common_dev)))[0]=event_dev;
     ((UINT32*)((UINT8*)common+(erst_dev-common_dev)))[2]=ERST_SEGMENT_TRBS;
 
@@ -283,7 +294,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     s=mmio_write64(p,rtsoff+0x20+0x10,erst_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio_write64(p,rtsoff+0x20+0x18,event_dev|ERDP_DCS);
+    s=mmio_write64(p,rtsoff+0x20+0x18,event_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
 
@@ -291,8 +302,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
        EFI_ERROR(mmio64(p,rtsoff+0x20+0x18,&erdp_rd))) { s=EFI_DEVICE_ERROR; goto teardown; }
     reads+=2;
     if((erstba_rd&ERST_ADDR_MASK)!=(erst_dev&ERST_ADDR_MASK) ||
-       (erdp_rd&ERDP_ADDR_MASK)!=(event_dev&ERDP_ADDR_MASK) ||
-       !(erdp_rd&ERDP_DCS)) { s=EFI_DEVICE_ERROR; goto teardown; }
+       (erdp_rd&ERDP_ADDR_MASK)!=(event_dev&ERDP_ADDR_MASK)) { s=EFI_DEVICE_ERROR; goto teardown; }
 
     if(EFI_ERROR(mmio32(p,opbase,&cmd)) ||
        EFI_ERROR(mmio32(p,opbase+4,&status))) { s=EFI_DEVICE_ERROR; goto teardown; }
@@ -302,7 +312,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     Print(u"V29 HALTED INITIALIZATION: PASS\r\n");
     Print(u"DMA MAP: COMMON=%016lx DCBAA=%016lx SPA=%016lx SCRATCHPADS=%u\r\n",common_dev,dcbaa_dev,spa_dev,scratchpads);
     Print(u"CONFIG=1 DCBAAP=%016lx CRCR=%016lx ERSTBA=%016lx ERDP=%016lx\r\n",
-          dcbaa_dev,crcr_dev,erst_dev,event_dev|ERDP_DCS);
+          dcbaa_dev,crcr_dev,erst_dev,event_dev);
     s=EFI_SUCCESS;
 
 teardown:
