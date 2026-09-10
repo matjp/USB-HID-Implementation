@@ -5,6 +5,13 @@
 - [ ] Reject xHCI controllers with HCIVERSION < 1.0 before any controller initialization.
 - [ ] Keep optional/later xHCI features capability-detected rather than inferred solely from version.
 
+## V29 / DMA contract
+
+- [ ] Run V29 on the Toshiba and record the EFI_PCI_IO Map() device addresses.
+- [ ] Confirm scratchpad count and allocation behavior.
+- [ ] Confirm CONFIG/DCBAAP/CRCR/ERST readback while halted.
+- [ ] Confirm teardown clears every controller pointer before DMA unmap/free.
+
 ## UEFI -> service handoff
 
 - [ ] Freeze the versioned keyboard/mouse-only handoff ABI after V28 review.
