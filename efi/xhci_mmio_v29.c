@@ -203,18 +203,20 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) goto out;
     common_ok=TRUE;
     dcbaa_dev=common_dev;
+    spa_dev=common_dev+SCRATCHPAD_ARRAY_OFF;
     crcr_dev=common_dev+4096;
     event_dev=common_dev+8192;
     erst_dev=common_dev+12288;
     if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL) ||
-       (!ac64 && (dcbaa_dev>0xffffffffULL || spa_dev>0xffffffffULL || crcr_dev>0xffffffffULL ||
-                  event_dev>0xffffffffULL || erst_dev>0xffffffffULL))) {
+       (!ac64 && (dcbaa_dev>0xffffffffULL || spa_dev+0x7ffULL>0xffffffffULL ||
+                   crcr_dev+0xfffULL>0xffffffffULL || event_dev+0xfffULL>0xffffffffULL ||
+                   erst_dev+0xfffULL>0xffffffffULL))) {
         s=EFI_BAD_BUFFER_SIZE; goto teardown;
     }
 
     dcbaa=(UINT64*)common;
-    spa_dev=common_dev+SCRATCHPAD_ARRAY_OFF;
     erst=(UINT64*)((UINT8*)common+12288);
+    uefi_call_wrapper(BS->SetMem,3,common,COMMON_PAGES*4096,0);
     if(scratchpads) {
         UINTN j;
         for(j=0;j<scratchpads;j++) {
@@ -231,10 +233,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         }
     }
 
-    uefi_call_wrapper(BS->SetMem,3,(UINT8*)common,4096,0);
-    uefi_call_wrapper(BS->SetMem,3,(UINT8*)common+4096,4096,0);
-    uefi_call_wrapper(BS->SetMem,3,(UINT8*)common+8192,4096,0);
-    uefi_call_wrapper(BS->SetMem,3,(UINT8*)common+12288,4096,0);
+
     ((UINT32*)common)[0]=0;
     ((UINT64*)((UINT8*)common+12288))[0]=event_dev;
     ((UINT32*)((UINT8*)common+12288))[2]=ERST_SEGMENT_TRBS;
