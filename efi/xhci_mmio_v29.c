@@ -108,10 +108,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
     VOID *common=NULL,*scratch_host[MAX_SCRATCHPADS];
     VOID *common_map=NULL,*scratch_map[MAX_SCRATCHPADS];
-    EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
+    VOID *scratch_block=NULL;
+    VOID *scratch_block_map=NULL;
+    EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS],scratch_block_dev=0;
     UINT64 *dcbaa;
     UINT64 *erst;
     UINTN scratch_pages=0;
+    UINTN scratch_block_pages=0;
     UINTN t;
     BOOLEAN common_ok=FALSE, halted=FALSE, reset_done=FALSE, ac64=FALSE;
     UINT32 bar_type;
@@ -251,18 +254,26 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     uefi_call_wrapper(BS->SetMem,3,common,common_pages*4096U,0);
     if(scratchpads) {
         UINTN j;
-        for(j=0;j<scratchpads;j++) {
-            scratch_alloc_pages=xhci_pagesize/4096U;
-            s=dma_alloc(p,scratch_alloc_pages,&scratch_host[j],&scratch_dev[j],&scratch_map[j]);
-            if(EFI_ERROR(s)) goto teardown;
-            scratch_pages++;
-            if((scratch_dev[j] & ((UINT64)xhci_pagesize-1ULL)) != 0) {
-                s=EFI_BAD_BUFFER_SIZE; goto teardown;
-            }
-            if(!ac64 && scratch_dev[j] + (UINT64)xhci_pagesize - 1ULL > 0xffffffffULL) {
-                s=EFI_BAD_BUFFER_SIZE; goto teardown;
-            }
+        /* Allocate all scratchpad pages as one contiguous DMA block.  This
+           guarantees PAGESIZE alignment for every buffer without adding a
+           general-purpose aligned allocator to this minimal test. */
+        scratch_alloc_pages=xhci_pagesize/4096U;
+        scratch_block_pages=scratchpads*scratch_alloc_pages;
+        s=dma_alloc(p,scratch_block_pages,&scratch_block,&scratch_block_dev,&scratch_block_map);
+        if(EFI_ERROR(s)) goto teardown;
+        if((scratch_block_dev & ((UINT64)xhci_pagesize-1ULL)) != 0) {
+            s=EFI_BAD_BUFFER_SIZE; goto teardown;
         }
+        if(!ac64 && scratch_block_dev +
+            (UINT64)scratchpads*xhci_pagesize - 1ULL > 0xffffffffULL) {
+            s=EFI_BAD_BUFFER_SIZE; goto teardown;
+        }
+        for(j=0;j<scratchpads;j++) {
+            scratch_host[j]=(UINT8*)scratch_block + j*xhci_pagesize;
+            scratch_dev[j]=scratch_block_dev + (UINT64)j*xhci_pagesize;
+            scratch_map[j]=NULL;
+        }
+        scratch_pages=scratchpads;
         {
             UINT64 *spa=(UINT64*)((UINT8*)common+(spa_dev-common_dev));
             for(j=0;j<scratchpads;j++) spa[j]=scratch_dev[j];
@@ -350,7 +361,7 @@ teardown:
                 ts=mmio_write32(p,rtsoff+0x20+0x08,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
             }
         }
-        for(t=0;t<scratch_pages;t++) dma_free(p,scratch_alloc_pages,scratch_host[t],scratch_map[t]);
+        if(scratch_block) dma_free(p,scratch_block_pages,scratch_block,scratch_block_map);
         if(common_ok) dma_free(p,common_pages,common,common_map);
         s=original_s;
     }
