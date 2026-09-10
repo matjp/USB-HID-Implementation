@@ -1,5 +1,5 @@
 name: Build EFI Test
-# V28 is the default discovery-handoff test; push-triggered builds use the V28 defaults.
+# EFI source provenance is tracked separately from workflow/documentation commits.
 # V28 compatibility header is maintained under efi/usb_io_compat.h.
 
 on:
@@ -80,15 +80,16 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "build/$TEST_ID"
-          ACTUAL_SHA="$(git rev-parse HEAD)"
-          test "$ACTUAL_SHA" = "$GITHUB_SHA"
-          printf 'SOURCE_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$ACTUAL_SHA" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
+          BUILD_SHA="$(git rev-parse HEAD)"
+          test "$BUILD_SHA" = "$GITHUB_SHA"
+          EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"
+          test -n "$EFI_COMMIT"
+          printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
           cat "build/$TEST_ID/BUILD-PROVENANCE.txt"
 
       - name: Compile
         run: |
           set -euxo pipefail
-          mkdir -p "build/$TEST_ID"
           gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol"             -fpic -ffreestanding -fno-stack-protector -fno-stack-check             -fshort-wchar -mno-red-zone -maccumulate-outgoing-args             -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os             -c "$SOURCE" -o "build/$TEST_ID/test.o"
 
       - name: Link
