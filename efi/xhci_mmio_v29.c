@@ -335,7 +335,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     writes++;
     s=mmio_write64_split(p,rtsoff+0x20+0x10,erst_dev);
     if(EFI_ERROR(s)) goto teardown;
-    writes++;
 
     s=mmio64_split(p,rtsoff+0x20+0x10,&erstba_rd);
     if(EFI_ERROR(s)) { Print(L"READBACK ERSTBA FAIL\\r\\n"); goto teardown; }
@@ -383,3 +382,5 @@ out:
     finish(s,reads,writes);
     return s;
 }
+
+/* Provenance test: harmless comment-only V29 source change. */
