@@ -65,7 +65,7 @@ V31 completed this gate on the Toshiba Satellite P50. It issued exactly one Enab
 
 Observed V31 result: xHCI 1.00, PCI 8086:8C31, 32 slots, 16 scratchpads, 4096-byte page size, Protocol Slot Type 0. Exactly one command and one doorbell were issued. The completion event was type 33 with Completion Code 1 (Success), Slot ID 1, and Command TRB Pointer equal to the submitted command TRB address `0x00000000C6803000`. `CPU-INTERRUPTS=0`, `EVENTS=1`, reset recovery passed, and all controller pointers were cleared before DMA release.
 
-The normative xHCI command model requires command completion events to identify the command TRB and Slot ID; later device commands must be sequenced from their corresponding completions. citeturn0search48turn0search49
+Reference: Intel xHCI Specification, command completion/event-ring requirements; Linux `xhci-hcd` initialization and command-ring implementation cross-check.
 
 **Gate 5 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
 
@@ -83,7 +83,9 @@ The initial Gate 6 implementation remains deliberately narrow:
 - no MSI/MSI-X setup;
 - no continuous keyboard report pump until device configuration is proven.
 
-The normative xHCI device lifecycle requires Enable Slot followed by Address Device, then device configuration using the USB configuration request and matching xHCI Configure Endpoint state. Software must wait for command completions before issuing subsequent commands. citeturn0search49turn0search48
+The normative xHCI device lifecycle requires Enable Slot followed by Address Device, then device configuration using the USB configuration request and matching xHCI Configure Endpoint state. Software must wait for command completions before issuing subsequent commands.
+
+Reference: Intel xHCI Specification / Requirements Specification, device-slot lifecycle and command-completion sequencing.
 
 The planned sequence is:
 
@@ -100,7 +102,7 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 5. **Descriptor retrieval:** retrieve only the descriptors needed to identify/configure the expected keyboard; validate descriptor lengths/types/bounds and endpoint direction/type/max packet size.
 6. **Configuration:** USB `SET_CONFIGURATION` and xHCI `Configure Endpoint` are separate operations. The endpoint contexts must match the selected live configuration/interface/endpoint, and the corresponding completions must be validated.
 7. **HID boot protocol:** issue HID `SET_PROTOCOL(boot)` only after the correct HID interface has been identified and configured. Do not begin continuous report polling in the first Gate 6 test.
-8. **DMA:** all contexts, rings, and control-transfer buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared. UEFI common-buffer mappings are coherent for processor/device access. citeturn0search0
+8. **DMA:** all contexts, rings, and control-transfer buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared. UEFI common-buffer mappings are coherent for processor/device access.
 9. **Failure safety:** after any command/transfer submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
 10. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout the first Gate 6 execution; poll event-ring memory directly as in V31.
 
