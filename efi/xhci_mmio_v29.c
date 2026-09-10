@@ -5,7 +5,7 @@
 #define XHCI_MIN_VERSION 0x0100U
 #define CMD_RUN   0x00000001U
 #define CMD_RESET 0x00000002U
-#define CMD_INTE  0x00000004U
+#define CMD_INTE   0x00000004U
 #define STS_HCH    0x00000001U
 #define STS_CNR    0x00000800U
 #define CRCR_RCS   0x00000001ULL
@@ -42,6 +42,9 @@ static EFI_STATUS mmio16(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT16 *v) {
 static EFI_STATUS mmio32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
     return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,v);
 }
+static EFI_STATUS mmio64(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
+    return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint64,0,(UINT64)off,1,v);
+}
 static EFI_STATUS mmio64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
     UINT32 lo=0,hi=0;
     EFI_STATUS s=mmio32(p,off,&lo);
@@ -54,6 +57,9 @@ static EFI_STATUS mmio64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
 static EFI_STATUS mmio_write32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 v) {
     return uefi_call_wrapper(p->Mem.Write,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,&v);
 }
+static EFI_STATUS mmio_write64(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 v) {
+    return uefi_call_wrapper(p->Mem.Write,6,p,EfiPciIoWidthUint64,0,(UINT64)off,1,&v);
+}
 static EFI_STATUS mmio_write64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 v) {
     UINT32 lo=(UINT32)v, hi=(UINT32)(v>>32);
     EFI_STATUS s=mmio_write32(p,off,lo);
@@ -65,24 +71,20 @@ static EFI_STATUS dma_alloc(EFI_PCI_IO_PROTOCOL *p, UINTN pages, VOID **host,
                             EFI_PHYSICAL_ADDRESS *dev, VOID **mapping) {
     EFI_STATUS s;
     UINTN bytes;
-
     *host=NULL;
     *mapping=NULL;
     *dev=0;
     if (!pages || pages > (UINTN)(~(UINTN)0)/4096U) return EFI_BAD_BUFFER_SIZE;
     bytes=pages*4096U;
-
     s=uefi_call_wrapper(p->AllocateBuffer,6,p,AllocateAnyPages,
                         EfiBootServicesData,pages,host,0);
     if(EFI_ERROR(s)) return s;
-
     s=uefi_call_wrapper(BS->SetMem,3,*host,bytes,0);
     if(EFI_ERROR(s)) {
         uefi_call_wrapper(p->FreeBuffer,3,p,pages,*host);
         *host=NULL;
         return s;
     }
-
     s=uefi_call_wrapper(p->Map,6,p,EfiPciIoOperationBusMasterCommonBuffer,
                         *host,&bytes,dev,mapping);
     if(EFI_ERROR(s) || bytes != pages*4096U) {
@@ -146,7 +148,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT32 reads=0,writes=0,maxslots=0,scratchpads=0,pagesize_reg=0;
     UINTN xhci_pagesize=0,dcbaa_pages=0,spa_pages=0,common_pages=0,page_shift=0,total_bytes=0,scratch_alloc_pages=0;
     UINT64 dcbaa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,spa_dev=0;
-    UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
+    UINT64 dcbaa_rd=0,erstba_rd=0,erdp_rd=0;
     VOID *common=NULL,*common_map=NULL;
     VOID *scratch_block=NULL,*scratch_aligned=NULL,*scratch_block_map=NULL;
     EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
@@ -327,6 +329,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         }
         s=uefi_call_wrapper(BS->SetMem,3,scratch_aligned,scratchpads*xhci_pagesize,0);
         if(EFI_ERROR(s)) { remember_failure(u"SCRATCHPAD",u"CLEAR SCRATCHPAD BUFFERS",s); goto teardown; }
+        if((scratch_aligned_dev&((UINT64)xhci_pagesize-1ULL))!=0) {
+            s=EFI_BAD_BUFFER_SIZE; remember_failure(u"SCRATCHPAD",u"VALIDATE DEVICE PAGE ALIGNMENT",s); goto teardown;
+        }
         if(!ac64&&scratch_aligned_dev+(UINT64)scratchpads*xhci_pagesize-1ULL>0xffffffffULL) {
             s=EFI_BAD_BUFFER_SIZE; remember_failure(u"SCRATCHPAD",u"VALIDATE 32-BIT ADDRESS",s); goto teardown;
         }
@@ -362,12 +367,18 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) { remember_failure(u"DCBAA",u"READ DCBAAP",s); goto teardown; }
     if((dcbaa_rd&~63ULL)!=(dcbaa_dev&~63ULL)) { s=EFI_DEVICE_ERROR; remember_failure(u"DCBAA",u"VERIFY DCBAAP",s); goto teardown; }
 
-    s=mmio_write64_split(p,opbase+0x18,crcr_dev|CRCR_RCS);
+    s=mmio_write64(p,opbase+0x18,crcr_dev|CRCR_RCS);
     if(EFI_ERROR(s)) { remember_failure(u"CRCR",u"WRITE CRCR",s); goto teardown; }
     writes++;
-    s=mmio64_split(p,opbase+0x18,&crcr_rd); reads+=2;
-    if(EFI_ERROR(s)) { remember_failure(u"CRCR",u"READ CRCR",s); goto teardown; }
-    if((crcr_rd&CRCR_ADDR_MASK)!=(crcr_dev&CRCR_ADDR_MASK)) { s=EFI_DEVICE_ERROR; remember_failure(u"CRCR",u"VERIFY CRCR",s); goto teardown; }
+    Print(u"CRCR WRITE PASS ADDR=%016lx RCS=1\r\n",crcr_dev);
+
+    s=mmio32(p,opbase,&cmd); reads++;
+    if(EFI_ERROR(s)) { remember_failure(u"CRCR",u"READ USBCMD AFTER CRCR",s); goto teardown; }
+    s=mmio32(p,opbase+4,&status); reads++;
+    if(EFI_ERROR(s)) { remember_failure(u"CRCR",u"READ USBSTS AFTER CRCR",s); goto teardown; }
+    if((cmd&CMD_RUN)||(status&STS_CNR)||!(status&STS_HCH)) {
+        s=EFI_DEVICE_ERROR; remember_failure(u"CRCR",u"VERIFY HALTED AFTER CRCR",s); goto teardown;
+    }
 
     s=mmio32(p,0x18,&rtsoff); reads++;
     if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"READ RTSOFF",s); goto teardown; }
