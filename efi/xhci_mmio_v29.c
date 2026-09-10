@@ -94,7 +94,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT32 id=0,cls=0,bar0=0,bar1=0,cap0=0,hcs1=0,hcs2=0,hcc1=0;
     UINT32 opbase=0,rtsoff=0,cmd=0,status=0,config=0;
     UINT32 reads=0,writes=0,maxslots=0,scratchpads=0,pagesize_reg=0;
-    UINTN xhci_pagesize=0, dcbaa_pages=0, spa_pages=0, common_pages=0, page_shift=0, total_bytes=0;
+    UINTN xhci_pagesize=0, dcbaa_pages=0, spa_pages=0, common_pages=0, page_shift=0, total_bytes=0, scratch_alloc_pages=0;
     UINT64 dcbaa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,spa_dev=0;
     UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
     VOID *common=NULL,*scratch_host[MAX_SCRATCHPADS];
@@ -233,7 +233,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(scratchpads) {
         UINTN j;
         for(j=0;j<scratchpads;j++) {
-            s=dma_alloc(p,1,&scratch_host[j],&scratch_dev[j],&scratch_map[j]);
+            scratch_alloc_pages=xhci_pagesize/4096U;
+            s=dma_alloc(p,scratch_alloc_pages,&scratch_host[j],&scratch_dev[j],&scratch_map[j]);
             if(EFI_ERROR(s)) goto teardown;
             scratch_pages++;
             if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
@@ -314,7 +315,7 @@ teardown:
                 ts=mmio_write32(p,rtsoff+0x20+0x08,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
             }
         }
-        for(t=0;t<scratch_pages;t++) dma_free(p,1,scratch_host[t],scratch_map[t]);
+        for(t=0;t<scratch_pages;t++) dma_free(p,scratch_alloc_pages,scratch_host[t],scratch_map[t]);
         if(common_ok) dma_free(p,common_pages,common,common_map);
         s=original_s;
     }
