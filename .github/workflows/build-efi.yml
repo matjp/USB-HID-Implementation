@@ -8,32 +8,32 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v28"
+        default: "v29"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v28.c"
+        default: "efi/xhci_mmio_v29.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V28 / UEFI HID HANDOFF DISCOVERY"
+        default: "xHCI V29 / HALTED INITIALIZATION PREPARATION"
         type: string
       verify1:
         description: "First string to require"
         required: true
-        default: "xHCI V28"
+        default: "xHCI V29"
         type: string
       verify2:
         description: "Second string to require"
         required: true
-        default: "V28 COMPLETE"
+        default: "V29 COMPLETE"
         type: string
       verify3:
         description: "Third string to require"
         required: true
-        default: "NO SERVICE DMA"
+        default: "DMA VIA EFI_PCI_IO MAP"
         type: string
 
 concurrency:
@@ -48,12 +48,12 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v28' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v28.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V28 / UEFI HID HANDOFF DISCOVERY' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V28' }}
-      VERIFY2: ${{ inputs.verify2 || 'V28 COMPLETE' }}
-      VERIFY3: ${{ inputs.verify3 || 'NO SERVICE DMA' }}
+      TEST_ID: ${{ inputs.test_id || 'v29' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v29.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V29 / HALTED INITIALIZATION PREPARATION' }}
+      VERIFY1: ${{ inputs.verify1 || 'xHCI V29' }}
+      VERIFY2: ${{ inputs.verify2 || 'V29 COMPLETE' }}
+      VERIFY3: ${{ inputs.verify3 || 'DMA VIA EFI_PCI_IO MAP' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -115,7 +115,7 @@ jobs:
             if ! strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$marker"; then
               echo "ERROR: required EFI marker not found: [$marker]" >&2
               echo "Embedded wide-string markers:" >&2
-              strings -el "build/$TEST_ID/BOOTX64.EFI" | sed -n '/V28/,+8p' >&2 || true
+              strings -el "build/$TEST_ID/BOOTX64.EFI" | sed -n '/V29/,+8p' >&2 || true
               exit 1
             fi
           done
