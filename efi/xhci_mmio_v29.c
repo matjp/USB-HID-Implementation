@@ -42,9 +42,6 @@ static EFI_STATUS mmio16(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT16 *v) {
 static EFI_STATUS mmio32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
     return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,v);
 }
-static EFI_STATUS mmio64(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
-    return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint64,0,(UINT64)off,1,v);
-}
 static EFI_STATUS mmio64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
     UINT32 lo=0,hi=0;
     EFI_STATUS s=mmio32(p,off,&lo);
@@ -56,9 +53,6 @@ static EFI_STATUS mmio64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
 }
 static EFI_STATUS mmio_write32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 v) {
     return uefi_call_wrapper(p->Mem.Write,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,&v);
-}
-static EFI_STATUS mmio_write64(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 v) {
-    return uefi_call_wrapper(p->Mem.Write,6,p,EfiPciIoWidthUint64,0,(UINT64)off,1,&v);
 }
 static EFI_STATUS mmio_write64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 v) {
     UINT32 lo=(UINT32)v, hi=(UINT32)(v>>32);
@@ -367,7 +361,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) { remember_failure(u"DCBAA",u"READ DCBAAP",s); goto teardown; }
     if((dcbaa_rd&~63ULL)!=(dcbaa_dev&~63ULL)) { s=EFI_DEVICE_ERROR; remember_failure(u"DCBAA",u"VERIFY DCBAAP",s); goto teardown; }
 
-    s=mmio_write64(p,opbase+0x18,crcr_dev|CRCR_RCS);
+    s=mmio_write64_split(p,opbase+0x18,crcr_dev|CRCR_RCS);
     if(EFI_ERROR(s)) { remember_failure(u"CRCR",u"WRITE CRCR",s); goto teardown; }
     writes++;
     Print(u"CRCR WRITE PASS ADDR=%016lx RCS=1\r\n",crcr_dev);
