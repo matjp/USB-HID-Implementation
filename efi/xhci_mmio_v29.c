@@ -297,13 +297,15 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
     if(EFI_ERROR(mmio32(p,0x18,&rtsoff))) { s=EFI_DEVICE_ERROR; goto teardown; }
     reads++;
+    /* xHCI event-ring initialization order: ERSTSZ, ERDP, then ERSTBA.
+       Writing ERSTBA enables the event-ring state machine, so it must be last. */
     s=mmio_write32(p,rtsoff+0x20+0x08,1);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio_write64_split(p,rtsoff+0x20+0x10,erst_dev);
+    s=mmio_write64_split(p,rtsoff+0x20+0x18,event_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio_write64_split(p,rtsoff+0x20+0x18,event_dev);
+    s=mmio_write64_split(p,rtsoff+0x20+0x10,erst_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
 
