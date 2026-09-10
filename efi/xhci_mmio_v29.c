@@ -98,7 +98,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     VOID *common_map=NULL,*scratch_map[MAX_SCRATCHPADS];
     EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
     UINT64 *dcbaa;
-    UINT64 *erst;
     UINTN scratch_pages=0;
     UINTN t;
     BOOLEAN common_ok=FALSE, halted=FALSE, reset_done=FALSE;
@@ -154,7 +153,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     maxslots=hcs1&0xffU;
     scratchpads=(((hcs2>>21)&0x1fU)<<5)|((hcs2>>27)&0x1fU);
     Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u AC64=%u HCH=%u CNR=%u\r\n",
-          maxslots,scratchpads,hcc1&1U,status&ST_HCH?1:0,status&STS_CNR?1:0);
+          maxslots,scratchpads,hcc1&1U,status&STS_HCH?1:0,status&STS_CNR?1:0);
     if(!maxslots || scratchpads>MAX_SCRATCHPADS) { s=EFI_UNSUPPORTED; goto out; }
 
     if(!(status&ST_HCH)) {
