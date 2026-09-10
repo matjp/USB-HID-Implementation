@@ -94,7 +94,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT32 id=0,cls=0,bar0=0,bar1=0,cap0=0,hcs1=0,hcs2=0,hcc1=0;
     UINT32 opbase=0,rtsoff=0,cmd=0,status=0,config=0;
     UINT32 reads=0,writes=0,maxslots=0,scratchpads=0,pagesize_reg=0;
-    UINTN xhci_pagesize=0, dcbaa_pages=0, spa_pages=0, common_pages=0;
+    UINTN xhci_pagesize=0, dcbaa_pages=0, spa_pages=0, common_pages=0, page_shift=0, total_bytes=0;
     UINT64 dcbaa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,spa_dev=0;
     UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
     VOID *common=NULL,*scratch_host[MAX_SCRATCHPADS];
@@ -157,9 +157,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     maxslots=hcs1&0xffU;
     scratchpads=(((hcs2>>21)&0x1fU)<<5)|((hcs2>>27)&0x1fU);
     if(EFI_ERROR(mmio32(p,opbase+0x08,&pagesize_reg))) { s=EFI_DEVICE_ERROR; goto out; }
-    if(pagesize_reg==0 || (pagesize_reg & (pagesize_reg-1U))) { s=EFI_UNSUPPORTED; goto out; }
-    xhci_pagesize=((UINTN)pagesize_reg)<<12;
-    if(xhci_pagesize < 4096U || xhci_pagesize > 65536U) { s=EFI_UNSUPPORTED; goto out; }
+    if(pagesize_reg==0) { s=EFI_UNSUPPORTED; goto out; }
+    while(page_shift<32U && ((pagesize_reg>>page_shift)&1U)==0) page_shift++;
+    if(page_shift>=32U) { s=EFI_UNSUPPORTED; goto out; }
+    xhci_pagesize=((UINTN)1U << (12U+page_shift));
+    if(xhci_pagesize < 4096U || xhci_pagesize > (1U<<20)) { s=EFI_UNSUPPORTED; goto out; }
     ac64=(hcc1&1U)!=0;
     Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u AC64=%u HCH=%u CNR=%u\r\n",
           maxslots,scratchpads,hcc1&1U,status&STS_HCH?1:0,status&STS_CNR?1:0);
@@ -207,15 +209,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     dcbaa_pages=((maxslots+1U)*sizeof(UINT64)+4095U)/4096U;
     spa_pages=(scratchpads*sizeof(UINT64)+xhci_pagesize-1U)/xhci_pagesize;
     if(spa_pages==0) spa_pages=1;
-    common_pages=dcbaa_pages+spa_pages+2U;
-    if(common_pages>64U) { s=EFI_OUT_OF_RESOURCES; goto out; }
+    total_bytes=dcbaa_pages*4096U + spa_pages*xhci_pagesize + 4096U + 4096U + 4096U;
+    common_pages=(total_bytes+4095U)/4096U;
+    if(common_pages>256U) { s=EFI_OUT_OF_RESOURCES; goto out; }
     s=dma_alloc(p,common_pages,&common,&common_dev,&common_map);
     if(EFI_ERROR(s)) goto out;
     common_ok=TRUE;
     dcbaa_dev=common_dev;
+    spa_dev=common_dev+dcbaa_pages*4096U;
     crcr_dev=spa_dev+spa_pages*xhci_pagesize;
     event_dev=crcr_dev+4096U;
-    erst_dev=event_dev+4096U;
+    erst_dev=event_dev+8192U;
     if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL) ||
        (!ac64 && (dcbaa_dev>0xffffffffULL || spa_dev+0x7ffULL>0xffffffffULL ||
                    crcr_dev+0xfffULL>0xffffffffULL || event_dev+0xfffULL>0xffffffffULL ||
@@ -224,8 +228,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     }
 
     dcbaa=(UINT64*)common;
-    erst=(UINT64*)((UINT8*)common+(common_pages-1U)*4096U);
-    uefi_call_wrapper(BS->SetMem,3,common,COMMON_PAGES*4096,0);
+    erst=(UINT64*)((UINT8*)common+(erst_dev-common_dev));
+    uefi_call_wrapper(BS->SetMem,3,common,common_pages*4096U,0);
     if(scratchpads) {
         UINTN j;
         for(j=0;j<scratchpads;j++) {
@@ -243,8 +247,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
 
     ((UINT32*)common)[0]=0;
-    ((UINT64*)((UINT8*)common+(common_pages-1U)*4096U))[0]=event_dev;
-    ((UINT32*)((UINT8*)common+(common_pages-1U)*4096U))[2]=ERST_SEGMENT_TRBS;
+    ((UINT64*)((UINT8*)common+(erst_dev-common_dev)))[0]=event_dev;
+    ((UINT32*)((UINT8*)common+(erst_dev-common_dev)))[2]=ERST_SEGMENT_TRBS;
 
     s=mmio_write32(p,opbase+0x38,1);
     if(EFI_ERROR(s)) goto teardown;
