@@ -25,21 +25,27 @@ V28/U20 successfully validated the explicit UEFI→service HID handoff on the To
 
 ## V29 status — Gate 3 PASS on Toshiba
 
-V29 successfully completed the halted xHCI initialization preparation gate on the Toshiba Satellite P50 using the build from commit `141a245dfa6f2580b956f8e3e1f89f30f770baf9`. The test reported xHCI 1.00, PCI 8086:8C31, 64-bit BAR 0xF7C00000, 32 slots, 16 scratchpads, AC64=1, HCH=1 and CNR=0 after reset. EFI_PCI_IO_PROTOCOL Map() supplied the device-visible DMA addresses for the controller-referenced memory. CONFIG, DCBAAP, CRCR and the primary event-ring registers were programmed and verified while halted. CRCR programming used the required split low-DWORD/high-DWORD MMIO access and no longer attempts invalid CRCR pointer readback verification.
+V29 successfully completed the halted xHCI initialization preparation gate on the Toshiba Satellite P50 using build commit `141a245dfa6f2580b956f8e3e1f89f30f770baf9`. The test reported xHCI 1.00, PCI 8086:8C31, 64-bit BAR 0xF7C00000, 32 slots, 16 scratchpads, AC64=1, HCH=1 and CNR=0 after reset. EFI_PCI_IO_PROTOCOL Map() supplied the device-visible DMA addresses for the controller-referenced memory. CONFIG, DCBAAP, CRCR and the primary event-ring registers were programmed and verified while halted. CRCR programming used the required split low-DWORD/high-DWORD MMIO access and no longer attempts invalid CRCR pointer readback verification.
 
 Observed V29 result: `RESULT=Success`, `FAIL STAGE=NONE`, with 27 MMIO reads and 14 MMIO writes. Teardown cleared all controller pointers before DMA release. The controller was never started: no Run/Stop, doorbell, command execution, interrupt delivery, or USB transfer occurred. This is a hardware PASS for Gate 3 and does not yet validate a running controller or command completion.
 
-## Gate 4 status — design finalized, hardware pending
+## V30 status — Gate 4 PASS on Toshiba
 
-Gate 4 is the **Controller start without commands** test. It is deliberately portable: Toshiba Linux IOMMU/VT-d state is not a prerequisite and the test will not program the IOMMU. The platform-specific DMA contract is delegated to UEFI through `EFI_PCI_IO_PROTOCOL`.
+V30 successfully proved the controller-start gate on the Toshiba Satellite P50. The test reused the V29 UEFI DMA contract, started the xHCI with valid CONFIG/DCBAAP/CRCR/event-ring state, kept CPU interrupt delivery disabled, observed `HCH=0`, then halted and reset the controller. No command, doorbell, USB transfer, or CPU interrupt occurred, and the event ring remained empty during the observation window.
 
-The test will retain V29's mapped common-buffer DMA objects, verify the controller's halted pre-run state and disabled CPU interrupt delivery, set Run/Stop, wait for `HCH=0`, observe briefly without commands or doorbells, then halt and reset. It will keep all mappings live while xHCI can DMA, and will clear every controller pointer before `Unmap()`/`FreeBuffer()`.
+Observed V30 result: `RUN: HCH=0 PASS`, `HALT: HCH=1 PASS`, `RESET: CNR=0 HCH=1 PASS`, `COMMANDS=0`, `DOORBELLS=0`, `CPU-INTERRUPTS=0`, `EVENTS=0`, `RESULT=Success`, `FAIL STAGE=NONE`. All controller pointers were cleared before DMA release. This is a hardware PASS for Gate 4 and establishes the safe baseline for the first command-ring operation.
 
-Gate 4 deliberately excludes Enable Slot, port reset, Address Device, descriptor transfers, USB transfers, MSI/MSI-X, CPU interrupt handlers, PCI BAR changes, IOMMU programming, and event consumption. It is only a proof that the xHCI controller can become a running bus master using the UEFI DMA contract and recover cleanly.
+## Gate 5 status — V31 prepared, build/test pending
+
+V31 is the first command-ring test. It will issue exactly one **Enable Slot** command and poll the primary event ring for the corresponding **Command Completion Event**. CPU interrupt delivery remains disabled so command-ring and event-ring correctness are isolated from interrupt routing.
+
+The command TRB is populated with the controller-declared Protocol Slot Type from the xHCI Supported Protocol capability, all other command fields are zero, and its Cycle bit is initialized to the command ring PCS. The command ring has a Link TRB with Toggle Cycle at the end of the segment. The test rings only Host Controller Doorbell 0. The completion event is consumed by polling the mapped event-ring memory, validated for type, Success completion code, slot ID, and command-TRB pointer, then ERDP is advanced and IMAN.IP is acknowledged if pending.
+
+V31 performs no port reset, Address Device, descriptor transfer, endpoint configuration, USB data transfer, MSI/MSI-X setup, CPU interrupt handling, or device-context programming. After the completion event, the controller is halted and reset before CRCR/DCBAAP/CONFIG/ERST references are cleared and DMA mappings are released. If the controller cannot be confirmed halted, the test retains DMA mappings and enters the non-returning fatal recovery path.
 
 ## DMA safety
 
-V29 is the first successful hardware test using EFI_PCI_IO_PROTOCOL DMA mapping for controller-referenced memory. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. The portability requirement is that UEFI resolves the platform's DMA-addressing/remapping details and supplies device-visible addresses through `Map()`. Platform IOMMU/VT-d state may be recorded as diagnostic evidence if a mapping or running-controller failure requires explanation, but it is not a project dependency.
+V29 and V30 are the first successful hardware tests using EFI_PCI_IO_PROTOCOL DMA mapping for controller-referenced memory. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. The portability requirement is that UEFI resolves the platform's DMA-addressing/remapping details and supplies device-visible addresses through `Map()`. Platform IOMMU/VT-d state may be recorded as diagnostic evidence if a mapping or running-controller failure requires explanation, but it is not a project dependency.
 
 ## Working records
 
