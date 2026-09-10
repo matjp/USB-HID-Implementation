@@ -49,3 +49,7 @@ The service shall consume the maximum useful keyboard/mouse discovery informatio
 ## D012 — UEFI is the portable DMA abstraction boundary
 
 The xHCI bridge must not depend on a particular machine's IOMMU/VT-d configuration. Platform-specific DMA addressing/remapping is delegated to `EFI_PCI_IO_PROTOCOL`: controller-referenced memory is allocated with `AllocateBuffer()`, mapped with `EfiPciIoOperationBusMasterCommonBuffer`, and programmed into xHCI using only the returned device-visible addresses. Mappings remain live while xHCI may DMA and are released only after controller references are cleared. IOMMU/VT-d state may be recorded for diagnosis, but it is not a normal portability prerequisite.
+
+## D013 — Poll command completions before enabling CPU interrupts
+
+The first command-ring test uses exactly one Enable Slot command and polls the primary event ring rather than enabling CPU interrupt delivery. This isolates command-ring, doorbell, event-ring cycle-state, completion-event parsing, and ERDP acknowledgement from MSI/MSI-X/interrupt-handler behavior. CPU interrupts remain disabled until command/event correctness is established.
