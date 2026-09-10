@@ -38,6 +38,8 @@ Exit criteria:
 
 ## Gate 3 — Halted initialization preparation
 
+V29 implements this gate. It owns the controller halt/reset transition, waits for CNR to clear, validates HCIVERSION/capabilities, allocates controller data structures through EFI_PCI_IO_PROTOCOL common-buffer DMA mapping, provisions scratchpads when required, programs CONFIG/DCBAAP/CRCR and the primary event-ring registers while halted, reads them back, then clears all controller pointers before unmapping/freeing DMA. No Run/Stop, doorbell, command, or transfer is issued.
+
 Replace the draft V27 with one self-contained test:
 
 `halt -> reset -> wait for reset completion -> wait for CNR clear -> validate capabilities -> allocate DMA objects -> program CONFIG, DCBAAP, CRCR, and primary-event-ring registers -> read back -> clear pointers -> release memory`
