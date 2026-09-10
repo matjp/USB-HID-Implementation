@@ -33,9 +33,13 @@ An experiment is marked **completed** only when its result was observed on hardw
 
 ## Gate 6 review outcome
 
-The next stage is deliberately narrower than a general USB driver. The normative xHCI baseline requires the normal device-slot lifecycle: Enable Slot first, then Address Device to transition the slot toward the addressed/default state, followed by configuration using USB SET_CONFIGURATION plus xHCI Configure Endpoint with matching endpoint contexts. The xHCI requirements also require software to wait for command completions before issuing subsequent commands. citeturn0search49turn0search48
+The next stage is deliberately narrower than a general USB driver. The normative xHCI baseline requires the normal device-slot lifecycle: Enable Slot first, then Address Device to transition the slot toward the addressed/default state, followed by configuration using USB SET_CONFIGURATION plus xHCI Configure Endpoint with matching endpoint contexts. The xHCI requirements also require software to wait for command completions before issuing subsequent commands.
 
-UEFI `EFI_PCI_IO_PROTOCOL` remains the DMA boundary. Common-buffer mappings are coherent between processor and bus master, and controller DMA must use the `DeviceAddress` returned by `Map()`; mappings must remain live until DMA is finished and then be unmapped/freed. citeturn0search0
+Reference: Intel xHCI Specification / Requirements Specification, device-slot lifecycle and command-completion sequencing.
+
+UEFI `EFI_PCI_IO_PROTOCOL` remains the DMA boundary. Common-buffer mappings are coherent between processor and bus master, and controller DMA must use the `DeviceAddress` returned by `Map()`; mappings must remain live until DMA is finished and then be unmapped/freed.
+
+Reference: UEFI Specification 2.9A, EFI PCI I/O Protocol, `Map()` / `Unmap()` / `AllocateBuffer()` common-buffer DMA requirements.
 
 Implementation review conclusions for Gate 6:
 
