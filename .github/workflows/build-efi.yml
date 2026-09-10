@@ -79,6 +79,7 @@ jobs:
       - name: Record build provenance
         run: |
           set -euxo pipefail
+          mkdir -p "build/$TEST_ID"
           ACTUAL_SHA="$(git rev-parse HEAD)"
           test "$ACTUAL_SHA" = "$GITHUB_SHA"
           printf 'SOURCE_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$ACTUAL_SHA" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
@@ -106,11 +107,14 @@ jobs:
       - name: Prepare artifact
         run: |
           set -euxo pipefail
-          cp "build/$TEST_ID/BOOTX64.EFI" BOOTX64.EFI
-          test -s BOOTX64.EFI
+          mkdir -p "artifact/EFI-$TEST_ID"
+          cp "build/$TEST_ID/BOOTX64.EFI" "artifact/EFI-$TEST_ID/BOOTX64.EFI"
+          cp "build/$TEST_ID/BUILD-PROVENANCE.txt" "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
+          test -s "artifact/EFI-$TEST_ID/BOOTX64.EFI"
+          test -s "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
 
       - uses: actions/upload-artifact@v4
         with:
           name: EFI-${{ env.TEST_ID }}
-          path: BOOTX64.EFI
+          path: artifact/EFI-${{ env.TEST_ID }}
           if-no-files-found: error
