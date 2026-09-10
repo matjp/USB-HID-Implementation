@@ -8,17 +8,17 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v30"
+        default: "v31"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v30.c"
+        default: "efi/xhci_mmio_v31.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V30 / CONTROLLER START WITHOUT COMMANDS"
+        default: "xHCI V31 / ENABLE SLOT COMMAND + COMPLETION"
         type: string
 
 concurrency:
@@ -33,9 +33,9 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v30' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v30.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V30 / CONTROLLER START WITHOUT COMMANDS' }}
+      TEST_ID: ${{ inputs.test_id || 'v31' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v31.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V31 / ENABLE SLOT COMMAND + COMPLETION' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -82,32 +82,17 @@ jobs:
         run: |
           set -u
           mkdir -p "build/$TEST_ID"
-
-          if ! BUILD_SHA="$(git rev-parse HEAD)"; then
-            echo "ERROR: unable to determine the checked-out build commit." >&2
-            exit 1
-          fi
+          if ! BUILD_SHA="$(git rev-parse HEAD)"; then exit 1; fi
           if [ "$BUILD_SHA" != "$GITHUB_SHA" ]; then
             echo "ERROR: checkout commit does not match GITHUB_SHA." >&2
-            echo "       checkout: $BUILD_SHA" >&2
-            echo "       expected: $GITHUB_SHA" >&2
             exit 1
           fi
-
           if ! git ls-files --error-unmatch -- "$SOURCE" >/dev/null 2>&1; then
             echo "ERROR: source file is not tracked by Git: $SOURCE" >&2
             exit 1
           fi
-
-          if ! EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"; then
-            echo "ERROR: unable to determine the latest commit affecting source: $SOURCE" >&2
-            exit 1
-          fi
-          if [ -z "$EFI_COMMIT" ]; then
-            echo "ERROR: Git returned no commit for source: $SOURCE" >&2
-            exit 1
-          fi
-
+          if ! EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"; then exit 1; fi
+          if [ -z "$EFI_COMMIT" ]; then exit 1; fi
           printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' \
             "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
           cat "build/$TEST_ID/BUILD-PROVENANCE.txt"

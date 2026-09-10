@@ -12,17 +12,32 @@
 - [x] Confirm CONFIG/DCBAAP/CRCR/ERST state while halted, using only specification-defined meaningful readback.
 - [x] Confirm teardown clears every controller pointer before DMA unmap/free.
 
-## Gate 4 — Controller start without commands — current
+## Gate 4 — Controller start without commands — complete
 
 - [x] Define the portable DMA prerequisite: UEFI `EFI_PCI_IO_PROTOCOL` resolves platform-specific DMA/IOMMU mapping; do not make Toshiba VT-d state a test dependency.
 - [x] Complete Gate 4 design review against the applicable xHCI specification and project staged plan.
 - [x] Complete Gate 4 implementation review requirements against xHCI spec, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI before implementation.
-- [ ] Build and verify the exact source/binary provenance in CI.
-- [ ] Perform post-build sanity review before hardware test.
-- [ ] Start the controller without submitting a command or ringing a doorbell.
-- [ ] Observe running state with CPU interrupts disabled.
-- [ ] Verify event-ring/DMA lifetime while running.
-- [ ] Verify halt/reset recovery is repeatable.
+- [x] Build and verify the exact source/binary provenance in CI.
+- [x] Perform post-build sanity review before hardware test.
+- [x] Start the controller without submitting a command or ringing a doorbell.
+- [x] Observe running state with CPU interrupts disabled.
+- [x] Verify event-ring/DMA lifetime while running.
+- [x] Verify halt/reset recovery is repeatable on Toshiba.
+
+## Gate 5 — One Enable Slot command + polled completion event — current
+
+- [x] Define the command-ring design: one Enable Slot TRB, command PCS cycle state, Link TRB with Toggle Cycle.
+- [x] Define the Protocol Slot Type lookup from the xHCI Supported Protocol capability.
+- [x] Define the event-ring polling design with CPU interrupts disabled.
+- [x] Define Command Completion Event validation: type, Success completion code, Slot ID, command TRB pointer.
+- [x] Define ERDP advancement and IMAN.IP acknowledgement.
+- [x] Preserve DMA mappings until controller halt/reset is confirmed.
+- [ ] Complete implementation review against xHCI spec, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI.
+- [ ] Build and verify exact source/binary provenance in CI.
+- [ ] Perform post-build sanity review.
+- [ ] Run V31 on Toshiba and observe one Enable Slot completion event.
+- [ ] Verify returned Slot ID and command TRB pointer.
+- [ ] Verify halt/reset recovery and DMA teardown after command completion.
 
 ## UEFI -> service handoff
 
@@ -39,13 +54,14 @@
 - [x] Retain all controller-referenced pages until controller pointers are cleared.
 - [x] Clear xHCI pointers before freeing those pages during teardown.
 - [x] Correct and fold in V27's event-ring setup for the halted preparation gate.
-- [ ] Start the controller and poll a real event ring (Gate 4/5).
+- [x] Start the controller and poll its running state without commands (Gate 4).
+- [ ] Submit one command and poll a real completion event (Gate 5).
 
 ## DMA / safety
 
-- [x] Define/use a DMA mapping interface with explicit CPU and device addresses for V29.
-- [x] Define buffer lifetime and controller-pointer teardown rules for V29.
-- [x] Verify that active V29 DMA testing remained confined to designated sacrificial hardware.
+- [x] Define/use a DMA mapping interface with explicit CPU and device addresses for V29/V30.
+- [x] Define buffer lifetime and controller-pointer teardown rules through a running controller.
+- [x] Verify that active V29/V30 DMA testing remained confined to designated sacrificial hardware.
 - [ ] Record Toshiba IOMMU/VT-d state only if required to diagnose a UEFI mapping or running-controller failure; it is not a Gate 4 prerequisite.
 
 ## Fixed two-device bring-up
@@ -74,8 +90,9 @@
 
 ## Testing
 
-- [x] Intel xHCI (Toshiba sacrificial hardware) halted initialization preparation.
-- [ ] Intel xHCI controller start without commands (Toshiba sacrificial hardware) — Gate 4.
+- [x] Intel xHCI (Toshiba sacrificial hardware) halted initialization preparation — Gate 3.
+- [x] Intel xHCI controller start without commands (Toshiba sacrificial hardware) — Gate 4.
+- [ ] Intel xHCI one Enable Slot command + polled completion event — Gate 5.
 - [ ] Second Intel generation and AMD xHCI (later, non-sacrificial).
 - [ ] USB 2 HID and USB 3 HID.
 - [ ] Devices behind a USB hub (later, out of initial scope).
