@@ -301,23 +301,23 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     s=EFI_SUCCESS;
 
 teardown:
-    /*
-     * Clear controller references before unmapping/freeing DMA. The controller
-     * is halted and no command/transfer was submitted.
-     */
-    if(p) {
-        s=mmio_write64(p,opbase+0x18,0); if(!EFI_ERROR(s)) writes++;
-        s=mmio_write64(p,opbase+0x30,0); if(!EFI_ERROR(s)) writes++;
-        s=mmio_write32(p,opbase+0x38,0); if(!EFI_ERROR(s)) writes++;
-        if(rtsoff) {
-            mmio_write64(p,rtsoff+0x20+0x10,0); writes++;
-            mmio_write64(p,rtsoff+0x20+0x18,0); writes++;
-            mmio_write32(p,rtsoff+0x20+0x08,0); writes++;
+    {
+        EFI_STATUS original_s=s;
+        EFI_STATUS ts;
+        if(p) {
+            ts=mmio_write64(p,opbase+0x18,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+            ts=mmio_write64(p,opbase+0x30,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+            ts=mmio_write32(p,opbase+0x38,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+            if(rtsoff) {
+                ts=mmio_write64(p,rtsoff+0x20+0x10,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+                ts=mmio_write64(p,rtsoff+0x20+0x18,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+                ts=mmio_write32(p,rtsoff+0x20+0x08,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+            }
         }
+        for(t=0;t<scratch_pages;t++) dma_free(p,1,scratch_host[t],scratch_map[t]);
+        if(common_ok) dma_free(p,common_pages,common,common_map);
+        s=original_s;
     }
-    for(t=0;t<scratch_pages;t++) dma_free(p,1,scratch_host[t],scratch_map[t]);
-    if(common_ok) dma_free(p,COMMON_PAGES,common,common_map);
-
 out:
     if(hs) FreePool(hs);
     finish(s,reads,writes);
