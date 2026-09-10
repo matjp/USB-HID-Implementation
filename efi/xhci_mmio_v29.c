@@ -16,7 +16,6 @@
 #define MAX_SCRATCHPADS 1024U
 #define COMMON_PAGES 4U
 #define DCBAA_BYTES 0x800U
-#define SCRATCHPAD_ARRAY_OFF 0x800U
 #define ERST_SEGMENT_TRBS 16U
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
@@ -240,7 +239,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
         }
         {
-            UINT64 *spa=(UINT64*)((UINT8*)common+SCRATCHPAD_ARRAY_OFF);
+            UINT64 *spa=(UINT64*)((UINT8*)common+(spa_dev-common_dev));
             for(j=0;j<scratchpads;j++) spa[j]=scratch_dev[j];
             dcbaa[0]=spa_dev;
         }
