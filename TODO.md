@@ -14,9 +14,9 @@
 
 ## Gate 4 — Controller start without commands — current
 
-- [ ] Record Toshiba IOMMU/VT-d state and relevant UEFI DMA ownership/mapping conditions before starting xHCI.
-- [ ] Perform design review against the applicable xHCI specification and project staged plan.
-- [ ] Perform implementation review against xHCI spec, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI.
+- [x] Define the portable DMA prerequisite: UEFI `EFI_PCI_IO_PROTOCOL` resolves platform-specific DMA/IOMMU mapping; do not make Toshiba VT-d state a test dependency.
+- [x] Complete Gate 4 design review against the applicable xHCI specification and project staged plan.
+- [x] Complete Gate 4 implementation review requirements against xHCI spec, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI before implementation.
 - [ ] Build and verify the exact source/binary provenance in CI.
 - [ ] Perform post-build sanity review before hardware test.
 - [ ] Start the controller without submitting a command or ringing a doorbell.
@@ -43,10 +43,10 @@
 
 ## DMA / safety
 
-- [ ] Determine how UEFI leaves xHCI DMA/IOMMU state on the Toshiba before Run/Stop.
 - [x] Define/use a DMA mapping interface with explicit CPU and device addresses for V29.
 - [x] Define buffer lifetime and controller-pointer teardown rules for V29.
 - [x] Verify that active V29 DMA testing remained confined to designated sacrificial hardware.
+- [ ] Record Toshiba IOMMU/VT-d state only if required to diagnose a UEFI mapping or running-controller failure; it is not a Gate 4 prerequisite.
 
 ## Fixed two-device bring-up
 
@@ -75,6 +75,7 @@
 ## Testing
 
 - [x] Intel xHCI (Toshiba sacrificial hardware) halted initialization preparation.
+- [ ] Intel xHCI controller start without commands (Toshiba sacrificial hardware) — Gate 4.
 - [ ] Second Intel generation and AMD xHCI (later, non-sacrificial).
 - [ ] USB 2 HID and USB 3 HID.
 - [ ] Devices behind a USB hub (later, out of initial scope).
