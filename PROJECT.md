@@ -1,6 +1,6 @@
 # Minimal x86-64 OS — USB / xHCI Project State
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
 ## Goal
 
@@ -22,13 +22,15 @@ V28/U20 successfully validated the explicit UEFI→service HID handoff on the To
 - Require 64-bit MMIO BAR; treat BAR width, assigned address, and xHCI DMA capability as separate properties.
 - Coreboot/libpayload and Linux xHCI driver are cross-reference sources only.
 
-## V29 status
+## V29 status — Gate 3 PASS on Toshiba
 
-V29 is the next hardware experiment: halted controller initialization with explicit UEFI PCI-I/O DMA mapping. It is designed to replace V27's unverified physical-address assumption by obtaining device-visible addresses through EFI_PCI_IO_PROTOCOL Map() and using common buffers for controller-referenced structures. It remains halted and issues no commands or transfers.
+V29 successfully completed the halted xHCI initialization preparation gate on the Toshiba Satellite P50 using the build from commit `141a245dfa6f2580b956f8e3e1f89f30f770baf9`. The test reported xHCI 1.00, PCI 8086:8C31, 64-bit BAR 0xF7C00000, 32 slots, 16 scratchpads, AC64=1, HCH=1 and CNR=0 after reset. EFI_PCI_IO_PROTOCOL Map() supplied the device-visible DMA addresses for the controller-referenced memory. CONFIG, DCBAAP, CRCR and the primary event-ring registers were programmed and verified while halted. CRCR programming used the required split low-DWORD/high-DWORD MMIO access and no longer attempts invalid CRCR pointer readback verification.
+
+Observed V29 result: `RESULT=Success`, `FAIL STAGE=NONE`, with 27 MMIO reads and 14 MMIO writes. Teardown cleared all controller pointers before DMA release. The controller was never started: no Run/Stop, doorbell, command execution, interrupt delivery, or USB transfer occurred. This is a hardware PASS for Gate 3 and does not yet validate a running controller or command completion.
 
 ## DMA safety
 
-Before any Run/Stop or DMA, investigate the Toshiba's IOMMU/VT-d state and UEFI DMA mapping behavior. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only.
+V29 is the first successful hardware test using EFI_PCI_IO_PROTOCOL DMA mapping for controller-referenced memory. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. Before Gate 4, investigate and document the Toshiba's IOMMU/VT-d state and the UEFI DMA mapping/ownership conditions relevant to starting the controller.
 
 ## Working records
 
@@ -36,7 +38,6 @@ Before any Run/Stop or DMA, investigate the Toshiba's IOMMU/VT-d state and UEFI 
 - `DECISIONS.md`: design decisions log.
 - `EXPERIMENTS.md`: chronological evidence log for hardware experiments.
 - `TODO.md`: gated task list with acceptance criteria.
-
 
 ### Mandatory xHCI implementation cross-check
 Every xHCI test that changes controller state or implements xHCI data structures must be reviewed against both the applicable xHCI specification and the coreboot/libpayload xHCI implementation. Coreboot is a practical implementation cross-check, not a substitute for the normative specification. Reviews must explicitly check controller reset/initialization sequencing, capability/register interpretation, PAGESIZE, DMA addressing, DCBAA, scratchpad buffers, command/event rings, and controller ownership assumptions where relevant.
