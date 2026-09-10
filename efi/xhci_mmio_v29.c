@@ -103,7 +103,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT64 *erst;
     UINTN scratch_pages=0;
     UINTN t;
-    BOOLEAN common_ok=FALSE, halted=FALSE, reset_done=FALSE;
+    BOOLEAN common_ok=FALSE, halted=FALSE, reset_done=FALSE, ac64=FALSE;
     UINT32 bar_type;
 
     InitializeLib(image,st);
@@ -155,6 +155,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     reads+=5;
     maxslots=hcs1&0xffU;
     scratchpads=(((hcs2>>21)&0x1fU)<<5)|((hcs2>>27)&0x1fU);
+    ac64=(hcc1&1U)!=0;
     Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u AC64=%u HCH=%u CNR=%u\r\n",
           maxslots,scratchpads,hcc1&1U,status&STS_HCH?1:0,status&STS_CNR?1:0);
     if(!maxslots || scratchpads>MAX_SCRATCHPADS) { s=EFI_UNSUPPORTED; goto out; }
@@ -193,6 +194,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     reads+=3;
     maxslots=hcs1&0xffU;
     scratchpads=(((hcs2>>21)&0x1fU)<<5)|((hcs2>>27)&0x1fU);
+    ac64=(hcc1&1U)!=0;
     Print(u"POST-RESET: SLOTS=%u SCRATCHPADS=%u AC64=%u HCH=1 CNR=0\r\n",
           maxslots,scratchpads,hcc1&1U);
     if(!maxslots || scratchpads>MAX_SCRATCHPADS) { s=EFI_UNSUPPORTED; goto out; }
@@ -204,7 +206,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     crcr_dev=common_dev+4096;
     event_dev=common_dev+8192;
     erst_dev=common_dev+12288;
-    if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL)) {
+    if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL) ||
+       (!ac64 && (dcbaa_dev>0xffffffffULL || spa_dev>0xffffffffULL || crcr_dev>0xffffffffULL ||
+                  event_dev>0xffffffffULL || erst_dev>0xffffffffULL))) {
         s=EFI_BAD_BUFFER_SIZE; goto teardown;
     }
 
@@ -216,6 +220,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         for(j=0;j<scratchpads;j++) {
             s=dma_alloc(p,1,&scratch_host[j],&scratch_dev[j],&scratch_map[j]);
             if(EFI_ERROR(s)) goto teardown;
+            if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
             scratch_pages++;
             dcbaa[j]=scratch_dev[j];
         }
@@ -290,9 +295,9 @@ teardown:
      * is halted and no command/transfer was submitted.
      */
     if(p) {
-        mmio_write64(p,opbase+0x18,0); writes++;
-        mmio_write64(p,opbase+0x30,0); writes++;
-        mmio_write32(p,opbase+0x38,0); writes++;
+        s=mmio_write64(p,opbase+0x18,0); if(!EFI_ERROR(s)) writes++;
+        s=mmio_write64(p,opbase+0x30,0); if(!EFI_ERROR(s)) writes++;
+        s=mmio_write32(p,opbase+0x38,0); if(!EFI_ERROR(s)) writes++;
         if(rtsoff) {
             mmio_write64(p,rtsoff+0x20+0x10,0); writes++;
             mmio_write64(p,rtsoff+0x20+0x18,0); writes++;
