@@ -264,7 +264,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         /* xHCI requires each scratchpad buffer to be cleared before Run.
            This test never enters Run, but establish the required invariant
            now without touching the buffers after handoff to the controller. */
-        SetMem(scratch_block,scratch_block_pages*4096U,0);
+        uefi_call_wrapper(BS->SetMem,3,scratch_block,scratch_block_pages*4096U,0);
         if((scratch_block_dev & ((UINT64)xhci_pagesize-1ULL)) != 0) {
             s=EFI_BAD_BUFFER_SIZE; goto teardown;
         }
