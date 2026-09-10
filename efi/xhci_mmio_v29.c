@@ -13,7 +13,7 @@
 #define ERST_ADDR_MASK 0xffffffffffffffc0ULL
 #define ERDP_ADDR_MASK 0xfffffffffffffff0ULL
 #define ERDP_DCS   0x1ULL
-#define MAX_SCRATCHPADS 256U
+#define MAX_SCRATCHPADS 1024U
 #define COMMON_PAGES 4U
 #define DCBAA_BYTES 0x800U
 #define SCRATCHPAD_ARRAY_OFF 0x800U
@@ -224,7 +224,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             if(EFI_ERROR(s)) goto teardown;
             if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
             scratch_pages++;
-            dcbaa[j]=scratch_dev[j];
         }
         {
             UINT64 *spa=(UINT64*)((UINT8*)common+SCRATCHPAD_ARRAY_OFF);
