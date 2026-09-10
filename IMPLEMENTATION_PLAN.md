@@ -36,23 +36,27 @@ Exit criteria:
 - Retained devices have an interrupt-IN endpoint.
 - UEFI-created live xHCI resources are not inherited.
 
-## Gate 3 — Halted initialization preparation
+## Gate 3 — Halted initialization preparation — PASS
 
-V29 implements this gate. It owns the controller halt/reset transition, waits for CNR to clear, validates HCIVERSION/capabilities, allocates controller data structures through EFI_PCI_IO_PROTOCOL common-buffer DMA mapping, provisions scratchpads when required, programs CONFIG/DCBAAP/CRCR and the primary event-ring registers while halted, reads them back, then clears all controller pointers before unmapping/freeing DMA. No Run/Stop, doorbell, command, or transfer is issued.
+V29 completed this gate on the Toshiba Satellite P50. It owns the controller halt/reset transition, waits for CNR to clear, validates HCIVERSION/capabilities, allocates controller data structures through EFI_PCI_IO_PROTOCOL common-buffer DMA mapping, provisions the required scratchpads, programs CONFIG/DCBAAP/CRCR and the primary event-ring registers while halted, verifies the applicable register state, then clears all controller pointers before unmapping/freeing DMA. No Run/Stop, doorbell, command, or transfer is issued.
 
-Replace the draft V27 with one self-contained test:
+The verified sequence is:
 
-`halt -> reset -> wait for reset completion -> wait for CNR clear -> validate capabilities -> allocate DMA objects -> program CONFIG, DCBAAP, CRCR, and primary-event-ring registers -> read back -> clear pointers -> release memory`
+`halt -> reset -> wait for reset completion -> wait for CNR clear -> validate capabilities -> allocate/map DMA objects -> program CONFIG, DCBAAP, CRCR, and primary-event-ring registers -> verify -> clear pointers -> release memory`
 
-The test must provision scratchpad infrastructure when required, remain halted, leave interrupts disabled, issue no doorbell, and submit no command.
+Toshiba V29 result: xHCI 1.00, PCI 8086:8C31, 64-bit BAR 0xF7C00000, 32 slots, 16 scratchpads, AC64=1, HCH=1, CNR=0. CRCR write passed using split low-DWORD/high-DWORD MMIO access; ERSTBA and ERDP readback passed. Final result was `Success` with no failed stage. All controller pointers were cleared before DMA release.
 
 Exit criteria:
 
-- Register values read back correctly.
+- Register values read back correctly where the specification defines meaningful readback.
 - The controller remains halted and ready.
 - Teardown clears every controller reference before memory is released.
 
-## Gate 4 — Controller start without commands
+**Gate 3 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
+
+## Gate 4 — Controller start without commands — NEXT
+
+Before implementation, complete the required design and implementation reviews against the applicable xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. Resolve the Toshiba IOMMU/VT-d and DMA ownership/mapping conditions relevant to a running controller.
 
 Retain valid ring memory, enable only the required event-ring state, start the controller, and observe that it reaches the expected running state. Do not submit a command, ring a doorbell, or enable CPU interrupt delivery.
 
