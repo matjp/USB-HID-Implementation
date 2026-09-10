@@ -150,7 +150,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     VOID *common=NULL,*common_map=NULL;
     VOID *scratch_block=NULL,*scratch_aligned=NULL,*scratch_block_map=NULL;
     EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
-    EFI_PHYSICAL_ADDRESS scratch_block_dev=0,scratch_aligned_dev=0;
+    EFI_PHYSICAL_ADDRESS scratch_aligned_dev=0;
     UINT64 *dcbaa,*erst;
     UINTN scratch_block_pages=0,t;
     BOOLEAN common_ok=FALSE,halted=FALSE,reset_done=FALSE,ac64=FALSE;
@@ -184,10 +184,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) { remember_failure(u"PCI",u"READ BAR0",s); goto out; }
     bar_type=(UINT32)((bar0>>1)&3U);
     if((bar0&1U)||bar_type==1U) { s=EFI_UNSUPPORTED; remember_failure(u"PCI",u"VALIDATE BAR",s); goto out; }
-    if(bar_type==2U) {
-        s=cfg32(p,0x14,&bar1);
-        if(EFI_ERROR(s)) { remember_failure(u"PCI",u"READ BAR1",s); goto out; }
-    }
+    if(bar_type!=2U) { s=EFI_UNSUPPORTED; remember_failure(u"PCI",u"REQUIRE 64-BIT BAR",s); goto out; }
+    s=cfg32(p,0x14,&bar1);
+    if(EFI_ERROR(s)) { remember_failure(u"PCI",u"READ BAR1",s); goto out; }
 
     s=mmio32(p,0,&cap0); reads++;
     if(EFI_ERROR(s)) { remember_failure(u"CAPS",u"READ CAPLENGTH",s); goto out; }
@@ -297,10 +296,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         if(EFI_ERROR(s)) { remember_failure(u"SCRATCHPAD",u"CLEAR HOST BUFFER",s); goto teardown; }
         {
             UINTN host_addr=(UINTN)scratch_block;
-            UINTN host_aligned=(host_addr+xhci_pagesize-1U)&~(xhci_pagesize-1U);
-            UINTN delta=host_aligned-host_addr;
+            UINTN align_minus_one=xhci_pagesize-1U;
+            UINTN host_aligned;
+            UINTN delta;
             UINTN scratch_bytes=(UINTN)scratchpads*xhci_pagesize;
-            UINTN available=scratch_block_pages*4096U-delta;
+            UINTN available;
+            if(host_addr>~(UINTN)0-align_minus_one) {
+                s=EFI_BAD_BUFFER_SIZE; remember_failure(u"SCRATCHPAD",u"CHECK HOST ALIGNMENT OVERFLOW",s); goto teardown;
+            }
+            host_aligned=(host_addr+align_minus_one)&~align_minus_one;
+            delta=host_aligned-host_addr;
+            available=scratch_block_pages*4096U-delta;
             if(host_aligned<host_addr||delta>scratch_block_pages*4096U||scratch_bytes>available) {
                 s=EFI_BAD_BUFFER_SIZE; remember_failure(u"SCRATCHPAD",u"VALIDATE HOST ALIGNMENT",s); goto teardown;
             }
@@ -367,13 +373,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"READ RTSOFF",s); goto teardown; }
     s=mmio_write32(p,rtsoff+0x20+0x08,1); writes++;
     if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"WRITE ERSTSZ",s); goto teardown; }
-    s=mmio_write64_split(p,rtsoff+0x20+0x18,event_dev);
-    if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"WRITE ERDP",s); goto teardown; }
-    writes++;
     s=mmio_write64_split(p,rtsoff+0x20+0x10,erst_dev);
     if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"ERSTBA WRITE",s); goto teardown; }
     writes++;
     Print(u"ERSTBA WRITE PASS\r\n");
+    s=mmio_write64_split(p,rtsoff+0x20+0x18,event_dev);
+    if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"WRITE ERDP",s); goto teardown; }
+    writes++;
 
     s=mmio64_split(p,rtsoff+0x20+0x10,&erstba_rd); reads+=2;
     if(EFI_ERROR(s)) { remember_failure(u"EVENT-RING",u"READBACK ERSTBA",s); Print(u"READBACK ERSTBA FAIL\r\n"); goto teardown; }
