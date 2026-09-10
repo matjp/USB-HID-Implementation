@@ -80,29 +80,63 @@ jobs:
 
       - name: Record build provenance
         run: |
-          set -euxo pipefail
+          set -u
           mkdir -p "build/$TEST_ID"
-          BUILD_SHA="$(git rev-parse HEAD)"
-          test "$BUILD_SHA" = "$GITHUB_SHA"
-          EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"
-          test -n "$EFI_COMMIT"
-          printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
+
+          if ! BUILD_SHA="$(git rev-parse HEAD)"; then
+            echo "ERROR: unable to determine the checked-out build commit." >&2
+            exit 1
+          fi
+          if [ "$BUILD_SHA" != "$GITHUB_SHA" ]; then
+            echo "ERROR: checkout commit does not match GITHUB_SHA." >&2
+            echo "       checkout: $BUILD_SHA" >&2
+            echo "       expected: $GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          if ! git ls-files --error-unmatch -- "$SOURCE" >/dev/null 2>&1; then
+            echo "ERROR: source file is not tracked by Git: $SOURCE" >&2
+            exit 1
+          fi
+
+          if ! EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"; then
+            echo "ERROR: unable to determine the latest commit affecting source: $SOURCE" >&2
+            exit 1
+          fi
+          if [ -z "$EFI_COMMIT" ]; then
+            echo "ERROR: Git returned no commit for source: $SOURCE" >&2
+            exit 1
+          fi
+
+          printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' \
+            "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
           cat "build/$TEST_ID/BUILD-PROVENANCE.txt"
 
       - name: Compile
         run: |
           set -euxo pipefail
-          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol"             -fpic -ffreestanding -fno-stack-protector -fno-stack-check             -fshort-wchar -mno-red-zone -maccumulate-outgoing-args             -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os             -c "$SOURCE" -o "build/$TEST_ID/test.o"
+          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" \
+            -fpic -ffreestanding -fno-stack-protector -fno-stack-check \
+            -fshort-wchar -mno-red-zone -maccumulate-outgoing-args \
+            -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os \
+            -c "$SOURCE" -o "build/$TEST_ID/test.o"
 
       - name: Link
         run: |
           set -euxo pipefail
-          ld -shared -Bsymbolic -nostdlib -znocombreloc             -L"$(dirname "$GNUEFI_LIBEFI")" -L"$(dirname "$GNUEFI_LIBGNUEFI")"             -T"$GNUEFI_ROOT/gnuefi/elf_x86_64_efi.lds"             "$GNUEFI_CRT" "build/$TEST_ID/test.o"             -o "build/$TEST_ID/BOOTX64-$TEST_ID.elf" -lgnuefi -lefi
+          ld -shared -Bsymbolic -nostdlib -znocombreloc \
+            -L"$(dirname "$GNUEFI_LIBEFI")" -L"$(dirname "$GNUEFI_LIBGNUEFI")" \
+            -T"$GNUEFI_ROOT/gnuefi/elf_x86_64_efi.lds" \
+            "$GNUEFI_CRT" "build/$TEST_ID/test.o" \
+            -o "build/$TEST_ID/BOOTX64-$TEST_ID.elf" -lgnuefi -lefi
 
       - name: Convert and verify EFI
         run: |
           set -euxo pipefail
-          objcopy -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym             -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc             --output-target=efi-app-x86_64 --subsystem=10             "build/$TEST_ID/BOOTX64-$TEST_ID.elf" "build/$TEST_ID/BOOTX64.EFI"
+          objcopy -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym \
+            -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc \
+            --output-target=efi-app-x86_64 --subsystem=10 \
+            "build/$TEST_ID/BOOTX64-$TEST_ID.elf" "build/$TEST_ID/BOOTX64.EFI"
           file "build/$TEST_ID/BOOTX64.EFI"
           objdump -h "build/$TEST_ID/BOOTX64.EFI"
           test -s "build/$TEST_ID/BOOTX64.EFI"
