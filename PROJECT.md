@@ -1,6 +1,6 @@
 # Minimal x86-64 OS — USB / xHCI Project State
 
-Last updated: 2026-09-10
+Last updated: 2026-09-11
 
 ## Goal
 
@@ -20,6 +20,7 @@ V28/U20 successfully validated the explicit UEFI→service HID handoff on the To
 - UEFI performs device enumeration and passes a small device-template snapshot to the bridge; the bridge never inherits live UEFI xHCI state.
 - Portable xHCI bridge core with platform ops layer: GNU-EFI test now, UEFI bridge later, kernel later if chosen.
 - Require 64-bit MMIO BAR; treat BAR width, assigned address, and xHCI DMA capability as separate properties.
+- **DMA portability boundary: the bridge does not inspect or depend on a platform-specific IOMMU/VT-d configuration. UEFI/EFI_PCI_IO_PROTOCOL owns platform-specific DMA mapping. Controller-referenced memory is allocated with `AllocateBuffer()` and mapped with `EfiPciIoOperationBusMasterCommonBuffer`; xHCI receives only the returned device-visible addresses, and mappings remain live until controller references are cleared.**
 - Coreboot/libpayload and Linux xHCI driver are cross-reference sources only.
 
 ## V29 status — Gate 3 PASS on Toshiba
@@ -28,9 +29,17 @@ V29 successfully completed the halted xHCI initialization preparation gate on th
 
 Observed V29 result: `RESULT=Success`, `FAIL STAGE=NONE`, with 27 MMIO reads and 14 MMIO writes. Teardown cleared all controller pointers before DMA release. The controller was never started: no Run/Stop, doorbell, command execution, interrupt delivery, or USB transfer occurred. This is a hardware PASS for Gate 3 and does not yet validate a running controller or command completion.
 
+## Gate 4 status — design finalized, hardware pending
+
+Gate 4 is the **Controller start without commands** test. It is deliberately portable: Toshiba Linux IOMMU/VT-d state is not a prerequisite and the test will not program the IOMMU. The platform-specific DMA contract is delegated to UEFI through `EFI_PCI_IO_PROTOCOL`.
+
+The test will retain V29's mapped common-buffer DMA objects, verify the controller's halted pre-run state and disabled CPU interrupt delivery, set Run/Stop, wait for `HCH=0`, observe briefly without commands or doorbells, then halt and reset. It will keep all mappings live while xHCI can DMA, and will clear every controller pointer before `Unmap()`/`FreeBuffer()`.
+
+Gate 4 deliberately excludes Enable Slot, port reset, Address Device, descriptor transfers, USB transfers, MSI/MSI-X, CPU interrupt handlers, PCI BAR changes, IOMMU programming, and event consumption. It is only a proof that the xHCI controller can become a running bus master using the UEFI DMA contract and recover cleanly.
+
 ## DMA safety
 
-V29 is the first successful hardware test using EFI_PCI_IO_PROTOCOL DMA mapping for controller-referenced memory. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. Before Gate 4, investigate and document the Toshiba's IOMMU/VT-d state and the UEFI DMA mapping/ownership conditions relevant to starting the controller.
+V29 is the first successful hardware test using EFI_PCI_IO_PROTOCOL DMA mapping for controller-referenced memory. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. The portability requirement is that UEFI resolves the platform's DMA-addressing/remapping details and supplies device-visible addresses through `Map()`. Platform IOMMU/VT-d state may be recorded as diagnostic evidence if a mapping or running-controller failure requires explanation, but it is not a project dependency.
 
 ## Working records
 
