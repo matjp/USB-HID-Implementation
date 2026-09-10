@@ -27,14 +27,23 @@ static EFI_STATUS cfg32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
 static EFI_STATUS mmio32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
     return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,v);
 }
-static EFI_STATUS mmio64(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
-    return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint64,0,(UINT64)off,1,v);
+static EFI_STATUS mmio64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 *v) {
+    UINT32 lo=0,hi=0;
+    EFI_STATUS s=mmio32(p,off,&lo);
+    if(EFI_ERROR(s)) return s;
+    s=mmio32(p,off+4,&hi);
+    if(EFI_ERROR(s)) return s;
+    *v=((UINT64)hi<<32)|lo;
+    return EFI_SUCCESS;
 }
 static EFI_STATUS mmio_write32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 v) {
     return uefi_call_wrapper(p->Mem.Write,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,&v);
 }
-static EFI_STATUS mmio_write64(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 v) {
-    return uefi_call_wrapper(p->Mem.Write,6,p,EfiPciIoWidthUint64,0,(UINT64)off,1,&v);
+static EFI_STATUS mmio_write64_split(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT64 v) {
+    UINT32 lo=(UINT32)v, hi=(UINT32)(v>>32);
+    EFI_STATUS s=mmio_write32(p,off,lo);
+    if(EFI_ERROR(s)) return s;
+    return mmio_write32(p,off+4,hi);
 }
 
 static EFI_STATUS dma_alloc(EFI_PCI_IO_PROTOCOL *p, UINTN pages, VOID **host,
@@ -274,16 +283,16 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
     if (!scratchpads && dcbaa[0] != 0) { s=EFI_DEVICE_ERROR; goto teardown; }
     if (scratchpads && dcbaa[0] != spa_dev) { s=EFI_DEVICE_ERROR; goto teardown; }
-    s=mmio_write64(p,opbase+0x30,dcbaa_dev);
+    s=mmio_write64_split(p,opbase+0x30,dcbaa_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio64(p,opbase+0x30,&dcbaa_rd); reads++;
+    s=mmio64_split(p,opbase+0x30,&dcbaa_rd); reads++;
     if(EFI_ERROR(s) || (dcbaa_rd&~63ULL)!=(dcbaa_dev&~63ULL)) { s=EFI_DEVICE_ERROR; goto teardown; }
 
-    s=mmio_write64(p,opbase+0x18,crcr_dev|CRCR_RCS);
+    s=mmio_write64_split(p,opbase+0x18,crcr_dev|CRCR_RCS);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio64(p,opbase+0x18,&crcr_rd); reads++;
+    s=mmio64_split(p,opbase+0x18,&crcr_rd); reads++;
     if(EFI_ERROR(s) || (crcr_rd&CRCR_ADDR_MASK)!=(crcr_dev&CRCR_ADDR_MASK)) { s=EFI_DEVICE_ERROR; goto teardown; }
 
     if(EFI_ERROR(mmio32(p,0x18,&rtsoff))) { s=EFI_DEVICE_ERROR; goto teardown; }
@@ -291,15 +300,15 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     s=mmio_write32(p,rtsoff+0x20+0x08,1);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio_write64(p,rtsoff+0x20+0x10,erst_dev);
+    s=mmio_write64_split(p,rtsoff+0x20+0x10,erst_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
-    s=mmio_write64(p,rtsoff+0x20+0x18,event_dev);
+    s=mmio_write64_split(p,rtsoff+0x20+0x18,event_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
 
-    if(EFI_ERROR(mmio64(p,rtsoff+0x20+0x10,&erstba_rd)) ||
-       EFI_ERROR(mmio64(p,rtsoff+0x20+0x18,&erdp_rd))) { s=EFI_DEVICE_ERROR; goto teardown; }
+    if(EFI_ERROR(mmio64_split(p,rtsoff+0x20+0x10,&erstba_rd)) ||
+       EFI_ERROR(mmio64_split(p,rtsoff+0x20+0x18,&erdp_rd))) { s=EFI_DEVICE_ERROR; goto teardown; }
     reads+=2;
     if((erstba_rd&ERST_ADDR_MASK)!=(erst_dev&ERST_ADDR_MASK) ||
        (erdp_rd&ERDP_ADDR_MASK)!=(event_dev&ERDP_ADDR_MASK)) { s=EFI_DEVICE_ERROR; goto teardown; }
@@ -320,12 +329,12 @@ teardown:
         EFI_STATUS original_s=s;
         EFI_STATUS ts;
         if(p) {
-            ts=mmio_write64(p,opbase+0x18,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
-            ts=mmio_write64(p,opbase+0x30,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+            ts=mmio_write64_split(p,opbase+0x18,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+            ts=mmio_write64_split(p,opbase+0x30,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
             ts=mmio_write32(p,opbase+0x38,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
             if(rtsoff) {
-                ts=mmio_write64(p,rtsoff+0x20+0x10,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
-                ts=mmio_write64(p,rtsoff+0x20+0x18,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+                ts=mmio_write64_split(p,rtsoff+0x20+0x10,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
+                ts=mmio_write64_split(p,rtsoff+0x20+0x18,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
                 ts=mmio_write32(p,rtsoff+0x20+0x08,0); if(!EFI_ERROR(ts)) writes++; else if(!EFI_ERROR(original_s)) original_s=ts;
             }
         }
