@@ -260,7 +260,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         link[0]=(UINT32)(crcr_dev & 0xffffffffULL);
         link[1]=(UINT32)(crcr_dev >> 32);
         link[2]=TRB_LINK_TYPE;
-        link[3]=TRB_LINK_TOGGLE | 1U;
+        link[3]=TRB_LINK_TOGGLE;
     }
 
     ((UINT64*)((UINT8*)common+(erst_dev-common_dev)))[0]=event_dev;
