@@ -49,12 +49,6 @@ The verified sequence is:
 
 Toshiba V29 result: xHCI 1.00, PCI 8086:8C31, 64-bit BAR 0xF7C00000, 32 slots, 16 scratchpads, AC64=1, HCH=1, CNR=0. CRCR write passed using split low-DWORD/high-DWORD MMIO access; ERSTBA and ERDP readback passed. Final result was `Success` with no failed stage. All controller pointers were cleared before DMA release.
 
-Exit criteria:
-
-- Register values read back correctly where the specification defines meaningful readback.
-- The controller remains halted and ready.
-- Teardown clears every controller reference before memory is released.
-
 **Gate 3 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
 
 ## Gate 4 — Controller start without commands — PASS
@@ -63,62 +57,69 @@ V30 completed this gate on the Toshiba Satellite P50. The test reused the V29 UE
 
 Toshiba V30 result: `RUN: HCH=0 PASS`, `HALT: HCH=1 PASS`, `RESET: CNR=0 HCH=1 PASS`, `COMMANDS=0`, `DOORBELLS=0`, `CPU-INTERRUPTS=0`, `EVENTS=0`, `RESULT=Success`, `FAIL STAGE=NONE`. All controller pointers were cleared before DMA release.
 
-Exit criteria:
-
-- The controller starts without host-system error or unexpected reset and reaches `HCH=0`.
-- The controller remains able to reference its mapped DMA structures for the full running interval.
-- CPU interrupt delivery remains disabled.
-- No command or doorbell is issued.
-- The controller halts on `RS=0`, then resets cleanly with `CNR` returning to 0.
-- Every controller DMA pointer is cleared before `Unmap()`/`FreeBuffer()`.
-- The sequence is repeatable on the Toshiba without requiring platform-specific IOMMU/VT-d programming.
-
 **Gate 4 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
 
-## Gate 5 — One Enable Slot command + polled completion event — CURRENT
+## Gate 5 — One Enable Slot command + polled completion event — PASS
 
-V31 is the first command-ring test. It starts from the V30-safe controller baseline and issues exactly one Enable Slot Command. The test keeps CPU interrupt delivery disabled and polls the primary event-ring memory directly for the corresponding Command Completion Event.
+V31 completed this gate on the Toshiba Satellite P50. It issued exactly one Enable Slot command using the controller-declared Protocol Slot Type, rang only Host Controller Doorbell 0, and polled the primary event ring for the corresponding Command Completion Event. CPU interrupt delivery remained disabled.
 
-Before implementation, cross-check the command-ring and event-ring design against the xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. In particular verify:
+Observed V31 result: xHCI 1.00, PCI 8086:8C31, 32 slots, 16 scratchpads, 4096-byte page size, Protocol Slot Type 0. Exactly one command and one doorbell were issued. The completion event was type 33 with Completion Code 1 (Success), Slot ID 1, and Command TRB Pointer equal to the submitted command TRB address `0x00000000C6803000`. `CPU-INTERRUPTS=0`, `EVENTS=1`, reset recovery passed, and all controller pointers were cleared before DMA release.
 
-- Enable Slot TRB type, Cycle bit, Slot Type and zeroed reserved/other fields.
-- Command-ring segment layout and Link TRB with Toggle Cycle.
-- CRCR pointer/alignment and RCS semantics; do not perform invalid CRCR pointer readback comparisons.
-- Host Controller Doorbell 0 location and value.
-- Command Completion Event type, Completion Code, Slot ID and Command TRB Pointer fields.
-- Event-ring producer cycle state and software dequeue processing.
-- ERDP advancement and IMAN.IP write-one-to-clear semantics while `IMAN.IE=0`.
-- DMA mappings and all controller references remain live until after halt/reset.
+Reference: Intel xHCI Specification, command completion/event-ring requirements; Linux `xhci-hcd` initialization and command-ring implementation cross-check.
 
-V31 sequence:
+**Gate 5 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
 
-`halt -> reset -> CNR clear -> validate caps/slot type -> allocate/map DCBAA/scratchpads/command ring/event ring/ERST -> program CONFIG/DCBAAP/CRCR/ERST -> verify ERST state -> disable CPU interrupts -> RS=1 -> HCH=0 -> Doorbell 0 -> poll event ring -> validate Command Completion Event -> advance ERDP/ack IP -> RS=0 -> HCH=1 -> reset -> CNR=0 -> clear controller pointers -> unmap/free DMA`
+## Gate 6 — One pre-connected wired keyboard — CURRENT
 
-The command must be the only xHCI command issued. No port reset, Address Device, descriptor transfer, endpoint configuration, USB data transfer, MSI/MSI-X setup, or CPU interrupt handler is permitted.
+Gate 6 introduces exactly one known external wired keyboard. The keyboard is connected **before boot** and its V28 UEFI discovery snapshot supplies the expected root-port/interface/endpoint facts. Those facts are constrained hints and validation inputs only: the bridge must still perform normal xHCI device setup and prove that the live device matches the expected keyboard.
 
-Safety rule: if a command has been submitted and the controller cannot be confirmed halted, the test must not release DMA mappings. It must retain the mappings and enter the non-returning fatal recovery path.
+The initial Gate 6 implementation remains deliberately narrow:
 
-Exit criteria:
+- one pre-connected wired keyboard;
+- no mouse traffic;
+- no hubs or hot-plug;
+- no arbitrary HID report parsing;
+- no CPU interrupt delivery; command and transfer completions are polled;
+- no MSI/MSI-X setup;
+- no continuous keyboard report pump until device configuration is proven.
 
-- Exactly one Enable Slot command is fetched/executed.
-- Exactly one Host Controller Doorbell 0 write is issued.
-- A valid Command Completion Event is observed by polling, with the command TRB pointer matching the submitted command and Completion Code = Success.
-- A valid non-zero Slot ID is returned within MaxSlotsEn.
-- Event dequeue acknowledgement is performed correctly.
-- CPU interrupt delivery remains disabled.
-- The controller halts and resets cleanly after the command.
-- Every controller DMA pointer is cleared before `Unmap()`/`FreeBuffer()`.
+The normative xHCI device lifecycle requires Enable Slot followed by Address Device, then device configuration using the USB configuration request and matching xHCI Configure Endpoint state. Software must wait for command completions before issuing subsequent commands.
 
-**Gate 5 status: DESIGN/IMPLEMENTATION PREPARATION COMPLETE; CI build and post-build review required before Toshiba hardware execution.**
+Reference: Intel xHCI Specification / Requirements Specification, device-slot lifecycle and command-completion sequencing.
 
-## Gate 6 — One pre-connected wired keyboard
+The planned sequence is:
 
-Use a single external wired keyboard connected before boot. Implement root-port identification/reset, Address Device, device and configuration descriptor retrieval, HID boot-interface selection, Set Configuration, and Set Protocol.
+`halt -> reset -> CNR clear -> validate caps -> identify expected root port -> verify port state -> port reset -> Enable Slot -> completion -> allocate/initialize device contexts -> DCBAA[slot] -> Address Device -> completion -> EP0 descriptor control transfers -> validate keyboard interface/endpoint -> SET_CONFIGURATION -> Configure Endpoint -> completion -> HID Set Protocol(boot) -> completion -> stop`
 
-Exit criteria:
+### Gate 6 implementation-review requirements
 
-- Descriptors are decoded from the intended device.
-- The selected HID interface is demonstrably boot-protocol capable.
+Before V32 is committed, review the implementation against the xHCI specification, USB HID/USB control-transfer requirements, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. Specifically check:
+
+1. **Port reset/state:** correct PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
+2. **Slot/context:** context-size selection from HCCPARAMS1, 64-byte/32-byte context layout as applicable, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
+3. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, Max Packet Size 0, Transfer Ring Dequeue Pointer, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
+4. **EP0 transfer ring:** correct Setup/Data/Status TRB layout, TRB cycle state, IOC/ISP semantics as applicable, transfer-ring dequeue pointer, and event-data/completion parsing.
+5. **Descriptor retrieval:** retrieve only the descriptors needed to identify/configure the expected keyboard; validate descriptor lengths/types/bounds and endpoint direction/type/max packet size.
+6. **Configuration:** USB `SET_CONFIGURATION` and xHCI `Configure Endpoint` are separate operations. The endpoint contexts must match the selected live configuration/interface/endpoint, and the corresponding completions must be validated.
+7. **HID boot protocol:** issue HID `SET_PROTOCOL(boot)` only after the correct HID interface has been identified and configured. Do not begin continuous report polling in the first Gate 6 test.
+8. **DMA:** all contexts, rings, and control-transfer buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared. UEFI common-buffer mappings are coherent for processor/device access.
+9. **Failure safety:** after any command/transfer submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
+10. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout the first Gate 6 execution; poll event-ring memory directly as in V31.
+
+### Gate 6 acceptance criteria
+
+- The intended keyboard is demonstrably connected to the expected root port before active configuration.
+- Port reset completes cleanly and the port remains in the expected state.
+- Enable Slot completion returns a valid Slot ID.
+- Address Device completes successfully and the device slot reaches the expected state.
+- Required descriptors are retrieved from the live device and match the expected keyboard facts sufficiently to continue.
+- USB SET_CONFIGURATION and xHCI Configure Endpoint both complete successfully with matching configuration state.
+- HID Set Protocol to boot succeeds for the selected keyboard interface.
+- No mouse traffic, hub support, CPU interrupts, MSI/MSI-X, or continuous report polling is introduced.
+- On every error path, DMA mappings remain live until controller references are safely eliminated.
+- The controller can be halted/reset and all controller pointers cleared before DMA release.
+
+**Gate 6 status: DESIGN REVIEW COMPLETE; implementation review, build/provenance, post-build review, and hardware test remain pending.**
 
 ## Gate 7 — Keyboard reports, then mouse
 

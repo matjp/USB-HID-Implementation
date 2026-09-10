@@ -24,7 +24,7 @@
 - [x] Verify event-ring/DMA lifetime while running.
 - [x] Verify halt/reset recovery is repeatable on Toshiba.
 
-## Gate 5 — One Enable Slot command + polled completion event — current
+## Gate 5 — One Enable Slot command + polled completion event — complete
 
 - [x] Define the command-ring design: one Enable Slot TRB, command PCS cycle state, Link TRB with Toggle Cycle.
 - [x] Define the Protocol Slot Type lookup from the xHCI Supported Protocol capability.
@@ -32,12 +32,32 @@
 - [x] Define Command Completion Event validation: type, Success completion code, Slot ID, command TRB pointer.
 - [x] Define ERDP advancement and IMAN.IP acknowledgement.
 - [x] Preserve DMA mappings until controller halt/reset is confirmed.
-- [ ] Complete implementation review against xHCI spec, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI.
+- [x] Complete implementation review against xHCI spec, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI.
+- [x] Build and verify exact source/binary provenance in CI.
+- [x] Perform post-build sanity review.
+- [x] Run V31 on Toshiba and observe one Enable Slot completion event.
+- [x] Verify returned Slot ID and command TRB pointer.
+- [x] Verify halt/reset recovery and DMA teardown after command completion.
+
+## Gate 6 — One pre-connected wired keyboard — current
+
+- [x] Define Gate 6 as one known wired keyboard, using V28 UEFI discovery facts as constrained hints/validation inputs.
+- [x] Review port-state/reset, Enable Slot, Address Device, control-transfer, descriptor, configuration, and HID boot-protocol sequencing against xHCI/USB specifications and implementation references.
+- [x] Keep mouse traffic and general USB functionality out of initial Gate 6 scope.
+- [x] Keep CPU interrupt delivery disabled; poll command/transfer completion events initially.
+- [ ] Record the exact keyboard/root-port precondition and recovery procedure before hardware execution.
+- [ ] Implement and review the root-port identification/reset stage.
+- [ ] Implement one-slot Enable Slot + completion stage as part of the Gate 6 flow.
+- [ ] Allocate and initialize the Input/Output Device Contexts and DCBAA entry required for Address Device.
+- [ ] Implement EP0 control-transfer support sufficient for required descriptors.
+- [ ] Issue Address Device and validate completion before further device commands.
+- [ ] Retrieve and validate device/configuration/interface/endpoint descriptors needed for the known keyboard.
+- [ ] Select the boot-protocol HID keyboard interface and issue Set Configuration / Set Protocol as required.
+- [ ] Validate all command and transfer completion events before proceeding.
 - [ ] Build and verify exact source/binary provenance in CI.
-- [ ] Perform post-build sanity review.
-- [ ] Run V31 on Toshiba and observe one Enable Slot completion event.
-- [ ] Verify returned Slot ID and command TRB pointer.
-- [ ] Verify halt/reset recovery and DMA teardown after command completion.
+- [ ] Perform post-build sanity review before Toshiba hardware execution.
+- [ ] Run the first Gate 6 hardware test on the Toshiba with exactly one wired keyboard connected.
+- [ ] Verify clean halt/reset and DMA teardown after the first Gate 6 stage.
 
 ## UEFI -> service handoff
 
@@ -55,13 +75,13 @@
 - [x] Clear xHCI pointers before freeing those pages during teardown.
 - [x] Correct and fold in V27's event-ring setup for the halted preparation gate.
 - [x] Start the controller and poll its running state without commands (Gate 4).
-- [ ] Submit one command and poll a real completion event (Gate 5).
+- [x] Submit one command and poll a real completion event (Gate 5).
 
 ## DMA / safety
 
-- [x] Define/use a DMA mapping interface with explicit CPU and device addresses for V29/V30.
+- [x] Define/use a DMA mapping interface with explicit CPU and device addresses for V29/V30/V31.
 - [x] Define buffer lifetime and controller-pointer teardown rules through a running controller.
-- [x] Verify that active V29/V30 DMA testing remained confined to designated sacrificial hardware.
+- [x] Verify that active V29/V30/V31 DMA testing remained confined to designated sacrificial hardware.
 - [ ] Record Toshiba IOMMU/VT-d state only if required to diagnose a UEFI mapping or running-controller failure; it is not a Gate 4 prerequisite.
 
 ## Fixed two-device bring-up
@@ -92,7 +112,8 @@
 
 - [x] Intel xHCI (Toshiba sacrificial hardware) halted initialization preparation — Gate 3.
 - [x] Intel xHCI controller start without commands (Toshiba sacrificial hardware) — Gate 4.
-- [ ] Intel xHCI one Enable Slot command + polled completion event — Gate 5.
+- [x] Intel xHCI one Enable Slot command + polled completion event (Toshiba sacrificial hardware) — Gate 5.
+- [ ] One pre-connected wired keyboard — Gate 6.
 - [ ] Second Intel generation and AMD xHCI (later, non-sacrificial).
 - [ ] USB 2 HID and USB 3 HID.
 - [ ] Devices behind a USB hub (later, out of initial scope).

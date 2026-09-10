@@ -33,26 +33,39 @@ Observed V29 result: `RESULT=Success`, `FAIL STAGE=NONE`, with 27 MMIO reads and
 
 V30 successfully proved the controller-start gate on the Toshiba Satellite P50. The test reused the V29 UEFI DMA contract, started the xHCI with valid CONFIG/DCBAAP/CRCR/event-ring state, kept CPU interrupt delivery disabled, observed `HCH=0`, then halted and reset the controller. No command, doorbell, USB transfer, or CPU interrupt occurred, and the event ring remained empty during the observation window.
 
-Observed V30 result: `RUN: HCH=0 PASS`, `HALT: HCH=1 PASS`, `RESET: CNR=0 HCH=1 PASS`, `COMMANDS=0`, `DOORBELLS=0`, `CPU-INTERRUPTS=0`, `EVENTS=0`, `RESULT=Success`, `FAIL STAGE=NONE`. All controller pointers were cleared before DMA release. This is a hardware PASS for Gate 4 and establishes the safe baseline for the first command-ring operation.
+Observed V30 result: `RUN: HCH=0 PASS`, `HALT: HCH=1 PASS`, `RESET: CNR=0 HCH=1 PASS`, `COMMANDS=0`, `DOORBELLS=0`, `CPU-INTERRUPTS=0`, `EVENTS=0`, `RESULT=Success`, `FAIL STAGE=NONE`. All controller pointers were cleared before DMA release. This is a hardware PASS for Gate 4 and establishes the safe baseline for command-ring operation.
 
-## Gate 5 status — V31 prepared, build/test pending
+## V31 status — Gate 5 PASS on Toshiba
 
-V31 is the first command-ring test. It will issue exactly one **Enable Slot** command and poll the primary event ring for the corresponding **Command Completion Event**. CPU interrupt delivery remains disabled so command-ring and event-ring correctness are isolated from interrupt routing.
+V31 successfully completed the first command-ring/event-ring gate on the Toshiba Satellite P50. The keyboard was intentionally disconnected. The controller reported xHCI 1.00, 32 slots, 16 scratchpads, 4096-byte page size, Doorbell Offset 0x3000, Runtime Offset 0x2000 and Protocol Slot Type 0. Exactly one Enable Slot command was issued and exactly one Doorbell 0 write was made. The event ring produced exactly one Command Completion Event: type 33, Completion Code 1 (Success), Slot ID 1, and Command TRB Pointer matching the submitted command TRB device address `0x00000000C6803000`.
 
-The command TRB is populated with the controller-declared Protocol Slot Type from the xHCI Supported Protocol capability, all other command fields are zero, and its Cycle bit is initialized to the command ring PCS. The command ring has a Link TRB with Toggle Cycle at the end of the segment. The test rings only Host Controller Doorbell 0. The completion event is consumed by polling the mapped event-ring memory, validated for type, Success completion code, slot ID, and command-TRB pointer, then ERDP is advanced and IMAN.IP is acknowledged if pending.
+Observed result: `V31 ENABLE SLOT: PASS SLOT=1`, `COMMANDS=1`, `DOORBELLS=1`, `CPU-INTERRUPTS=0`, `EVENTS=1`, `RESET RECOVERY PASS`, `RESULT=Success`, `MMIO READS=66`, `WRITES=29`. All controller pointers were cleared before DMA release. This establishes the command-ring → controller → event-ring completion path on the Toshiba without involving a USB device.
 
-V31 performs no port reset, Address Device, descriptor transfer, endpoint configuration, USB data transfer, MSI/MSI-X setup, CPU interrupt handling, or device-context programming. After the completion event, the controller is halted and reset before CRCR/DCBAAP/CONFIG/ERST references are cleared and DMA mappings are released. If the controller cannot be confirmed halted, the test retains DMA mappings and enters the non-returning fatal recovery path.
+## Gate 6 status — CURRENT
+
+Gate 6 introduces exactly one pre-connected wired keyboard. V28's UEFI discovery snapshot supplies the expected root port/interface/endpoint facts, but those facts are constrained hints and validation inputs rather than authority to skip normal xHCI device setup. The bridge must independently reset the expected root port, enable a fresh slot, allocate/program device contexts, issue Address Device, retrieve the required live descriptors through EP0 control transfers, select the intended HID boot interface, set configuration, configure the xHCI endpoint, and set HID boot protocol.
+
+The first Gate 6 implementation remains deliberately narrow: no mouse traffic, hubs, hot-plug, arbitrary HID report parsing, MSI/MSI-X, CPU interrupts, or continuous report polling. Command and transfer completions remain polled from the event ring. The Slot ID from V31 is not reused; every run starts from a fresh reset and obtains a new slot.
+
+### Gate 6 review status
+
+The Gate 6 design review is complete. The normative xHCI requirements establish the Enable Slot → Address Device → device configuration lifecycle and require software to sequence later commands from their completion events. UEFI common-buffer DMA remains the portable DMA boundary: the bridge uses mapped device addresses and keeps mappings live until controller references are safely eliminated.
+
+Before implementation, the remaining mandatory review points are: PORTSC reset/change-bit handling; context-size and device-context layout; DCBAA slot entry and EP0 context; Address Device fields; control-transfer Setup/Data/Status TRBs; descriptor bounds and endpoint validation; separate USB SET_CONFIGURATION and xHCI Configure Endpoint operations; HID Set Protocol timing; and conservative DMA lifetime on every failure path.
+
+The development loop remains: **design review → implementation review → commit → build/CI → post-build review → Toshiba hardware test only when all applicable gates pass.** No Gate 6 hardware test is authorized from documentation alone.
 
 ## DMA safety
 
-V29 and V30 are the first successful hardware tests using EFI_PCI_IO_PROTOCOL DMA mapping for controller-referenced memory. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. The portability requirement is that UEFI resolves the platform's DMA-addressing/remapping details and supplies device-visible addresses through `Map()`. Platform IOMMU/VT-d state may be recorded as diagnostic evidence if a mapping or running-controller failure requires explanation, but it is not a project dependency.
+V29, V30 and V31 are successful hardware tests using EFI_PCI_IO_PROTOCOL DMA mapping. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only. The portability requirement is that UEFI resolves the platform's DMA-addressing/remapping details and supplies device-visible addresses through `Map()`. Platform IOMMU/VT-d state may be recorded as diagnostic evidence if a mapping or running-controller failure requires explanation, but it is not a project dependency.
 
 ## Working records
 
 - `ARCHITECTURE.md`: system design, service boundary, bridge layers, and ABI details.
 - `DECISIONS.md`: design decisions log.
-- `EXPERIMENTS.md`: chronological evidence log for hardware experiments.
-- `TODO.md`: gated task list with acceptance criteria.
+- `EXPERIMENTS.md`: chronological evidence log for hardware experiments and Gate 6 review.
+- `IMPLEMENTATION_PLAN.md`: gated implementation and acceptance criteria.
+- `TODO.md`: gated task list.
 
 ### Mandatory xHCI implementation cross-check
 Every xHCI test that changes controller state or implements xHCI data structures must be reviewed against both the applicable xHCI specification and the coreboot/libpayload xHCI implementation. Coreboot is a practical implementation cross-check, not a substitute for the normative specification. Reviews must explicitly check controller reset/initialization sequencing, capability/register interpretation, PAGESIZE, DMA addressing, DCBAA, scratchpad buffers, command/event rings, and controller ownership assumptions where relevant.
