@@ -8,17 +8,17 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v29"
+        default: "v30"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v29.c"
+        default: "efi/xhci_mmio_v30.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V29 / HALTED INITIALIZATION PREPARATION"
+        default: "xHCI V30 / CONTROLLER START WITHOUT COMMANDS"
         type: string
 
 concurrency:
@@ -33,9 +33,9 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v29' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v29.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V29 / HALTED INITIALIZATION PREPARATION' }}
+      TEST_ID: ${{ inputs.test_id || 'v30' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v30.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V30 / CONTROLLER START WITHOUT COMMANDS' }}
 
     steps:
       - uses: actions/checkout@v4
