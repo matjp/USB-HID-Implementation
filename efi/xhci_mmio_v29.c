@@ -36,6 +36,9 @@ static void remember_failure(const CHAR16 *stage, const CHAR16 *op, EFI_STATUS s
 static EFI_STATUS cfg32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
     return uefi_call_wrapper(p->Pci.Read,5,p,EfiPciIoWidthUint32,off,1,v);
 }
+static EFI_STATUS mmio16(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT16 *v) {
+    return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint16,0,(UINT64)off,1,v);
+}
 static EFI_STATUS mmio32(EFI_PCI_IO_PROTOCOL *p, UINT32 off, UINT32 *v) {
     return uefi_call_wrapper(p->Mem.Read,6,p,EfiPciIoWidthUint32,0,(UINT64)off,1,v);
 }
@@ -189,10 +192,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     s=mmio32(p,0,&cap0); reads++;
     if(EFI_ERROR(s)) { remember_failure(u"CAPS",u"READ CAPLENGTH",s); goto out; }
     opbase=cap0&0xffU;
-    s=mmio32(p,0x02,&status); reads++;
-    if(EFI_ERROR(s)) { remember_failure(u"CAPS",u"READ HCIVERSION",s); goto out; }
     {
-        UINT16 version=(UINT16)(status&0xffffU);
+        UINT16 version=0;
+        s=mmio16(p,0x02,&version); reads++;
+        if(EFI_ERROR(s)) { remember_failure(u"CAPS",u"READ HCIVERSION",s); goto out; }
         if(version<XHCI_MIN_VERSION) { s=EFI_UNSUPPORTED; remember_failure(u"CAPS",u"VALIDATE HCIVERSION",s); goto out; }
         Print(u"xHCI VERSION=%u.%02u PCI=%04x:%04x BAR=%08x/%08x OPBASE=%02x\r\n",
               version>>8,version&255,id&65535,id>>16,bar0,bar1,opbase);
@@ -288,17 +291,33 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         scratch_alloc_pages=xhci_pagesize/4096U;
         scratch_block_pages=scratchpads*scratch_alloc_pages+scratch_alloc_pages-1U;
         if(scratch_block_pages<scratchpads||scratch_block_pages>256U) { s=EFI_OUT_OF_RESOURCES; remember_failure(u"SCRATCHPAD",u"CALCULATE BUFFER PAGES",s); goto teardown; }
-        s=dma_alloc(p,scratch_block_pages,&scratch_block,&scratch_block_dev,&scratch_block_map);
-        if(EFI_ERROR(s)) { remember_failure(u"SCRATCHPAD",u"ALLOC/MAP SCRATCHPADS",s); goto teardown; }
+        s=uefi_call_wrapper(p->AllocateBuffer,6,p,AllocateAnyPages,EfiBootServicesData,scratch_block_pages,&scratch_block,0);
+        if(EFI_ERROR(s)) { remember_failure(u"SCRATCHPAD",u"ALLOC HOST BUFFER",s); goto teardown; }
+        s=uefi_call_wrapper(BS->SetMem,3,scratch_block,scratch_block_pages*4096U,0);
+        if(EFI_ERROR(s)) { remember_failure(u"SCRATCHPAD",u"CLEAR HOST BUFFER",s); goto teardown; }
         {
-            UINT64 aligned_dev=(scratch_block_dev+(UINT64)xhci_pagesize-1ULL)&~((UINT64)xhci_pagesize-1ULL);
-            UINTN delta=(UINTN)(aligned_dev-scratch_block_dev);
-            if(delta>(UINTN)scratch_block_pages*4096U||
-               (UINTN)scratchpads*xhci_pagesize>(UINTN)scratch_block_pages*4096U-delta) {
-                s=EFI_BAD_BUFFER_SIZE; remember_failure(u"SCRATCHPAD",u"VALIDATE ALIGNED SUBRANGE",s); goto teardown;
+            UINTN host_addr=(UINTN)scratch_block;
+            UINTN host_aligned=(host_addr+xhci_pagesize-1U)&~(xhci_pagesize-1U);
+            UINTN delta=host_aligned-host_addr;
+            UINTN scratch_bytes=(UINTN)scratchpads*xhci_pagesize;
+            UINTN available=scratch_block_pages*4096U-delta;
+            if(host_aligned<host_addr||delta>scratch_block_pages*4096U||scratch_bytes>available) {
+                s=EFI_BAD_BUFFER_SIZE; remember_failure(u"SCRATCHPAD",u"VALIDATE HOST ALIGNMENT",s); goto teardown;
             }
-            scratch_aligned=(UINT8*)scratch_block+delta;
-            scratch_aligned_dev=aligned_dev;
+            scratch_aligned=(VOID*)host_aligned;
+            {
+                UINTN map_bytes=scratch_bytes;
+                s=uefi_call_wrapper(p->Map,6,p,EfiPciIoOperationBusMasterCommonBuffer,
+                                    scratch_aligned,&map_bytes,&scratch_aligned_dev,&scratch_block_map);
+                if(EFI_ERROR(s)||map_bytes!=scratch_bytes) {
+                    EFI_STATUS original=EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
+                    if(!EFI_ERROR(s)&&scratch_block_map) uefi_call_wrapper(p->Unmap,2,p,scratch_block_map);
+                    scratch_block_map=NULL;
+                    remember_failure(u"SCRATCHPAD",u"MAP ALIGNED RANGE",original);
+                    s=original;
+                    goto teardown;
+                }
+            }
         }
         s=uefi_call_wrapper(BS->SetMem,3,scratch_aligned,scratchpads*xhci_pagesize,0);
         if(EFI_ERROR(s)) { remember_failure(u"SCRATCHPAD",u"CLEAR SCRATCHPAD BUFFERS",s); goto teardown; }
@@ -379,9 +398,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 teardown:
     {
         EFI_STATUS original_s=s;
-        /* Cleanup is deliberately conservative: clear controller-owned
-           pointers first, while the DMA mappings are still valid. Never set
-           Run, never ring a doorbell, and never issue a command here. */
         if(p&&opbase) {
             ts=mmio_write64_split(p,opbase+0x18,0); writes+=EFI_ERROR(ts)?0:1;
             if(EFI_ERROR(ts)) remember_failure(u"CLEANUP",u"CLEAR CRCR",ts);
@@ -398,18 +414,21 @@ teardown:
                 if(EFI_ERROR(ts)) remember_failure(u"CLEANUP",u"CLEAR ERSTSZ",ts);
             }
         }
+        if(scratch_block_map) {
+            ts=uefi_call_wrapper(p->Unmap,2,p,scratch_block_map);
+            if(EFI_ERROR(ts)) remember_failure(u"CLEANUP",u"UNMAP SCRATCHPAD DMA",ts);
+            scratch_block_map=NULL;
+        }
         if(scratch_block) {
-            ts=dma_free(p,scratch_block_pages,scratch_block,scratch_block_map);
-            if(EFI_ERROR(ts)) remember_failure(u"CLEANUP",u"FREE SCRATCHPAD DMA",ts);
-            scratch_block=NULL; scratch_block_map=NULL;
+            ts=uefi_call_wrapper(p->FreeBuffer,3,p,scratch_block_pages,scratch_block);
+            if(EFI_ERROR(ts)) remember_failure(u"CLEANUP",u"FREE SCRATCHPAD HOST",ts);
+            scratch_block=NULL;
         }
         if(common_ok) {
             ts=dma_free(p,common_pages,common,common_map);
             if(EFI_ERROR(ts)) remember_failure(u"CLEANUP",u"FREE COMMON DMA",ts);
             common=NULL; common_map=NULL; common_ok=FALSE;
         }
-        /* Preserve the first functional failure. Cleanup failures are still
-           reported through FAIL STAGE/OP, but do not hide the original code. */
         s=original_s;
     }
 out:
