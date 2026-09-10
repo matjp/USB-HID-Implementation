@@ -20,6 +20,8 @@ An experiment is marked **completed** only when its result was observed on hardw
 
 - **V28**: UEFI -> service HID handoff discovery test added. V28 is read-only: no xHCI MMIO writes, no DMA allocation, no port reset, no xHCI ring setup.
 
+- **V29**: halted xHCI initialization preparation artifact. Uses EFI_PCI_IO_PROTOCOL common-buffer allocation/mapping for controller-referenced memory; performs halt/reset/CNR-clear and programs CONFIG, DCBAAP, CRCR and primary event-ring registers while halted. No Run/Stop, doorbell, command, or transfer. Hardware execution is on Toshiba only and remains subject to the DMA safety gate.
+
 ## Project focus
 
 **Consolidation task**: Transform V24–V27 into one self-contained `xhci_bridge_init()` with a portable platform operations layer. The next experimental test (V28) runs this routine with **empty device hints** — halt → reset → CNR clear → capability validation → DMA allocation → DCBAA/command/event rings → readback → safe teardown — still issues no commands and touches no USB device.
