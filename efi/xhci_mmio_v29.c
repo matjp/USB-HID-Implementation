@@ -218,14 +218,19 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     dcbaa_pages=((maxslots+1U)*sizeof(UINT64)+4095U)/4096U;
     spa_pages=(scratchpads*sizeof(UINT64)+xhci_pagesize-1U)/xhci_pagesize;
     if(spa_pages==0) spa_pages=1;
-    total_bytes=dcbaa_pages*4096U + spa_pages*xhci_pagesize + 4096U + 4096U + 4096U;
+    /* The Scratchpad Buffer Array and every scratchpad buffer must be
+       aligned to the controller's selected xHCI page size.  Reserve the
+       DCBAA first, then round the SPA start up to that page boundary. */
+    total_bytes=dcbaa_pages*4096U + (xhci_pagesize-1U) +
+                spa_pages*xhci_pagesize + 4096U + 4096U + 4096U;
     common_pages=(total_bytes+4095U)/4096U;
     if(common_pages>256U) { s=EFI_OUT_OF_RESOURCES; goto out; }
     s=dma_alloc(p,common_pages,&common,&common_dev,&common_map);
     if(EFI_ERROR(s)) goto out;
     common_ok=TRUE;
     dcbaa_dev=common_dev;
-    spa_dev=common_dev+dcbaa_pages*4096U;
+    spa_dev=(common_dev+dcbaa_pages*4096U+xhci_pagesize-1U) &
+            ~((UINT64)xhci_pagesize-1ULL);
     crcr_dev=spa_dev+spa_pages*xhci_pagesize;
     event_dev=crcr_dev+4096U;
     erst_dev=event_dev+8192U;
@@ -251,7 +256,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             s=dma_alloc(p,scratch_alloc_pages,&scratch_host[j],&scratch_dev[j],&scratch_map[j]);
             if(EFI_ERROR(s)) goto teardown;
             scratch_pages++;
-            if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
+            if((scratch_dev[j] & ((UINT64)xhci_pagesize-1ULL)) != 0) {
+                s=EFI_BAD_BUFFER_SIZE; goto teardown;
+            }
+            if(!ac64 && scratch_dev[j] + (UINT64)xhci_pagesize - 1ULL > 0xffffffffULL) {
+                s=EFI_BAD_BUFFER_SIZE; goto teardown;
+            }
         }
         {
             UINT64 *spa=(UINT64*)((UINT8*)common+(spa_dev-common_dev));
