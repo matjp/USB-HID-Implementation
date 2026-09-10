@@ -22,6 +22,10 @@ V28/U20 successfully validated the explicit UEFI→service HID handoff on the To
 - Require 64-bit MMIO BAR; treat BAR width, assigned address, and xHCI DMA capability as separate properties.
 - Coreboot/libpayload and Linux xHCI driver are cross-reference sources only.
 
+## V29 status
+
+V29 is the next hardware experiment: halted controller initialization with explicit UEFI PCI-I/O DMA mapping. It is designed to replace V27's unverified physical-address assumption by obtaining device-visible addresses through EFI_PCI_IO_PROTOCOL Map() and using common buffers for controller-referenced structures. It remains halted and issues no commands or transfers.
+
 ## DMA safety
 
 Before any Run/Stop or DMA, investigate the Toshiba's IOMMU/VT-d state and UEFI DMA mapping behavior. Active xHCI/DMA experiments use the Toshiba (sacrificial) only; the Dell XPS 8950 is read-only.
