@@ -98,6 +98,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     VOID *common_map=NULL,*scratch_map[MAX_SCRATCHPADS];
     EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
     UINT64 *dcbaa;
+    UINT64 *erst;
     UINTN scratch_pages=0;
     UINTN t;
     BOOLEAN common_ok=FALSE, halted=FALSE, reset_done=FALSE;
@@ -156,11 +157,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
           maxslots,scratchpads,hcc1&1U,status&STS_HCH?1:0,status&STS_CNR?1:0);
     if(!maxslots || scratchpads>MAX_SCRATCHPADS) { s=EFI_UNSUPPORTED; goto out; }
 
-    if(!(status&ST_HCH)) {
+    if(!(status&STS_HCH)) {
         s=mmio_write32(p,opbase,cmd & ~(CMD_RUN|CMD_INTE));
         if(EFI_ERROR(s)) goto out;
         writes++;
-        s=wait_status(p,opbase,ST_HCH,ST_HCH,1000,&status);
+        s=wait_status(p,opbase,STS_HCH,STS_HCH,1000,&status);
         reads+=1;
         if(EFI_ERROR(s)) goto out;
         halted=TRUE;
@@ -182,7 +183,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     s=wait_status(p,opbase,STS_CNR,0,10000,&status);
     reads++;
     if(EFI_ERROR(s)) goto out;
-    if(!(status&ST_HCH)) { s=EFI_DEVICE_ERROR; goto out; }
+    if(!(status&STS_HCH)) { s=EFI_DEVICE_ERROR; goto out; }
 
     if(EFI_ERROR(mmio32(p,0x04,&hcs1)) ||
        EFI_ERROR(mmio32(p,0x08,&hcs2)) ||
@@ -276,7 +277,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(mmio32(p,opbase,&cmd)) ||
        EFI_ERROR(mmio32(p,opbase+4,&status))) { s=EFI_DEVICE_ERROR; goto teardown; }
     reads+=2;
-    if((cmd&CMD_RUN) || !(status&ST_HCH) || (status&STS_CNR)) { s=EFI_DEVICE_ERROR; goto teardown; }
+    if((cmd&CMD_RUN) || !(status&STS_HCH) || (status&STS_CNR)) { s=EFI_DEVICE_ERROR; goto teardown; }
 
     Print(u"V29 HALTED INITIALIZATION: PASS\r\n");
     Print(u"DMA MAP: COMMON=%016lx SCRATCHPADS=%u\r\n",common_dev,scratchpads);
