@@ -15,6 +15,8 @@
 #define ERDP_DCS   0x1ULL
 #define MAX_SCRATCHPADS 256U
 #define COMMON_PAGES 4U
+#define DCBAA_BYTES 0x800U
+#define SCRATCHPAD_ARRAY_OFF 0x800U
 #define ERST_SEGMENT_TRBS 16U
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
@@ -92,7 +94,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT32 id=0,cls=0,bar0=0,bar1=0,cap0=0,hcs1=0,hcs2=0,hcc1=0;
     UINT32 opbase=0,rtsoff=0,cmd=0,status=0,config=0;
     UINT32 reads=0,writes=0,maxslots=0,scratchpads=0;
-    UINT64 dcbaa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0;
+    UINT64 dcbaa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,spa_dev=0;
     UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
     VOID *common=NULL,*scratch_host[MAX_SCRATCHPADS];
     VOID *common_map=NULL,*scratch_map[MAX_SCRATCHPADS];
@@ -202,11 +204,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     crcr_dev=common_dev+4096;
     event_dev=common_dev+8192;
     erst_dev=common_dev+12288;
-    if((dcbaa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL)) {
+    if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL)) {
         s=EFI_BAD_BUFFER_SIZE; goto teardown;
     }
 
     dcbaa=(UINT64*)common;
+    spa_dev=common_dev+SCRATCHPAD_ARRAY_OFF;
     erst=(UINT64*)((UINT8*)common+12288);
     if(scratchpads) {
         UINTN j;
@@ -216,20 +219,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             scratch_pages++;
             dcbaa[j]=scratch_dev[j];
         }
-        dcbaa[0]=common_dev+0x400; /* temporary placeholder overwritten below */
-        /*
-         * Scratchpad Array must be a device-visible array of 64-bit pointers.
-         * Reuse the first 4 KiB DCBAA page: its first entries are the scratchpad
-         * pointers only when scratchpads are required. Reserve 0x400 bytes in
-         * that page for the array and leave DCBAA entries above it zero.
-         */
         {
-            UINT64 *spa=(UINT64*)common;
+            UINT64 *spa=(UINT64*)((UINT8*)common+SCRATCHPAD_ARRAY_OFF);
             for(j=0;j<scratchpads;j++) spa[j]=scratch_dev[j];
-            dcbaa[0]=common_dev;
+            dcbaa[0]=spa_dev;
         }
     }
 
+    uefi_call_wrapper(BS->SetMem,3,(UINT8*)common,4096,0);
     uefi_call_wrapper(BS->SetMem,3,(UINT8*)common+4096,4096,0);
     uefi_call_wrapper(BS->SetMem,3,(UINT8*)common+8192,4096,0);
     uefi_call_wrapper(BS->SetMem,3,(UINT8*)common+12288,4096,0);
@@ -243,6 +240,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     s=mmio32(p,opbase+0x38,&config); reads++;
     if(EFI_ERROR(s) || (config&0xffU)!=1) { s=EFI_DEVICE_ERROR; goto teardown; }
 
+    if (!scratchpads && dcbaa[0] != 0) { s=EFI_DEVICE_ERROR; goto teardown; }
+    if (scratchpads && dcbaa[0] != spa_dev) { s=EFI_DEVICE_ERROR; goto teardown; }
     s=mmio_write64(p,opbase+0x30,dcbaa_dev);
     if(EFI_ERROR(s)) goto teardown;
     writes++;
@@ -280,7 +279,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if((cmd&CMD_RUN) || !(status&STS_HCH) || (status&STS_CNR)) { s=EFI_DEVICE_ERROR; goto teardown; }
 
     Print(u"V29 HALTED INITIALIZATION: PASS\r\n");
-    Print(u"DMA MAP: COMMON=%016lx SCRATCHPADS=%u\r\n",common_dev,scratchpads);
+    Print(u"DMA MAP: COMMON=%016lx DCBAA=%016lx SPA=%016lx SCRATCHPADS=%u\r\n",common_dev,dcbaa_dev,spa_dev,scratchpads);
     Print(u"CONFIG=1 DCBAAP=%016lx CRCR=%016lx ERSTBA=%016lx ERDP=%016lx\r\n",
           dcbaa_dev,crcr_dev,erst_dev,event_dev|ERDP_DCS);
     s=EFI_SUCCESS;
