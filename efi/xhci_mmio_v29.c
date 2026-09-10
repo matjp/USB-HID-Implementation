@@ -156,6 +156,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     reads+=5;
     maxslots=hcs1&0xffU;
     scratchpads=(((hcs2>>21)&0x1fU)<<5)|((hcs2>>27)&0x1fU);
+    if(EFI_ERROR(mmio32(p,opbase+0x08,&pagesize_reg))) { s=EFI_DEVICE_ERROR; goto out; }
     if(pagesize_reg==0 || (pagesize_reg & (pagesize_reg-1U))) { s=EFI_UNSUPPORTED; goto out; }
     xhci_pagesize=((UINTN)pagesize_reg)<<12;
     if(xhci_pagesize < 4096U || xhci_pagesize > 65536U) { s=EFI_UNSUPPORTED; goto out; }
@@ -194,8 +195,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
     if(EFI_ERROR(mmio32(p,0x04,&hcs1)) ||
        EFI_ERROR(mmio32(p,0x08,&hcs2)) ||
-       EFI_ERROR(mmio32(p,0x10,&hcc1)) ||
-       EFI_ERROR(mmio32(p,opbase+0x08,&pagesize_reg))) { s=EFI_DEVICE_ERROR; goto out; }
+       EFI_ERROR(mmio32(p,0x10,&hcc1))) { s=EFI_DEVICE_ERROR; goto out; }
     reads+=3;
     maxslots=hcs1&0xffU;
     scratchpads=(((hcs2>>21)&0x1fU)<<5)|((hcs2>>27)&0x1fU);
@@ -213,9 +213,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if(EFI_ERROR(s)) goto out;
     common_ok=TRUE;
     dcbaa_dev=common_dev;
-    crcr_dev=common_dev+4096;
-    event_dev=common_dev+8192;
-    erst_dev=common_dev+12288;
+    crcr_dev=spa_dev+spa_pages*xhci_pagesize;
+    event_dev=crcr_dev+4096U;
+    erst_dev=event_dev+4096U;
     if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL) ||
        (!ac64 && (dcbaa_dev>0xffffffffULL || spa_dev+0x7ffULL>0xffffffffULL ||
                    crcr_dev+0xfffULL>0xffffffffULL || event_dev+0xfffULL>0xffffffffULL ||
@@ -231,8 +231,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         for(j=0;j<scratchpads;j++) {
             s=dma_alloc(p,1,&scratch_host[j],&scratch_dev[j],&scratch_map[j]);
             if(EFI_ERROR(s)) goto teardown;
-            if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
             scratch_pages++;
+            if(!ac64 && scratch_dev[j]>0xffffffffULL) { s=EFI_BAD_BUFFER_SIZE; goto teardown; }
         }
         {
             UINT64 *spa=(UINT64*)((UINT8*)common+SCRATCHPAD_ARRAY_OFF);
