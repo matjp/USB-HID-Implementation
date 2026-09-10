@@ -8,17 +8,17 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v31"
+        default: "v32"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v31.c"
+        default: "efi/xhci_mmio_v32.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V31 / ENABLE SLOT COMMAND + COMPLETION"
+        default: "xHCI V32 / PORT RESET + ADDRESS DEVICE"
         type: string
 
 concurrency:
@@ -33,9 +33,9 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v31' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v31.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V31 / ENABLE SLOT COMMAND + COMPLETION' }}
+      TEST_ID: ${{ inputs.test_id || 'v32' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v32.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V32 / PORT RESET + ADDRESS DEVICE' }}
 
     steps:
       - uses: actions/checkout@v4
