@@ -57,21 +57,11 @@ Exit criteria:
 
 **Gate 3 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
 
-## Gate 4 — Controller start without commands — NEXT
+## Gate 4 — Controller start without commands — PASS
 
-The Gate 4 design is portable and does **not** require prior discovery of the Toshiba's Linux-visible IOMMU/VT-d state. UEFI is the platform abstraction: the test uses `EFI_PCI_IO_PROTOCOL.AllocateBuffer()` plus `Map(EfiPciIoOperationBusMasterCommonBuffer)` and programs xHCI only with the resulting device-visible addresses. The UEFI DMA mapping/ownership contract, rather than a Toshiba-specific IOMMU configuration, is the prerequisite.
+V30 completed this gate on the Toshiba Satellite P50. The test reused the V29 UEFI DMA contract, initialized valid controller-referenced memory, disabled CPU interrupt delivery, set Run/Stop, waited for `HCH=0`, observed the running controller, then halted and reset it. No command, doorbell, USB transfer, or CPU interrupt was generated.
 
-The required design and implementation reviews must still be completed against the applicable xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. Platform-specific DMA behavior is recorded only when needed to explain a UEFI mapping failure or unexpected hardware result; it is not a portability requirement.
-
-Retain valid ring memory and mappings, enable only the required primary event-ring state, start the controller, and observe that it reaches the expected running state. Do not submit a command, ring a doorbell, or enable CPU interrupt delivery. Poll status only; do not consume or acknowledge event-ring entries in Gate 4.
-
-Gate 4 sequence:
-
-`V29 halt/reset/init -> retain DMA mappings -> verify CONFIG/DCBAAP/CRCR/event-ring state -> verify interrupts disabled -> RS=1 -> wait HCH=0 -> observe briefly -> RS=0 -> wait HCH=1 -> reset -> CNR clear -> clear controller pointers -> unmap/free DMA`
-
-Before `RS=1`, explicitly verify `CONFIG=1`, valid mapped `DCBAAP`, valid command-ring state, `ERSTSZ=1`, valid mapped `ERSTBA`/`ERDP`, `IMAN.IE=0`, `USBCMD.EIE=0`, `USBCMD.HSEIE=0`, `HCH=1`, and `CNR=0`. The controller must be allowed to run with all DMA allocations and mappings alive. No Enable Slot, port reset, Address Device, descriptor transfer, USB transfer, MSI/MSI-X setup, CPU interrupt handler, PCI BAR change, IOMMU programming, or doorbell is permitted.
-
-An event-ring write by the running controller is not itself a Gate 4 failure; Gate 4 does not interpret or consume events. The test only establishes that the controller can start, remain a live bus master for the observation window, and recover cleanly.
+Toshiba V30 result: `RUN: HCH=0 PASS`, `HALT: HCH=1 PASS`, `RESET: CNR=0 HCH=1 PASS`, `COMMANDS=0`, `DOORBELLS=0`, `CPU-INTERRUPTS=0`, `EVENTS=0`, `RESULT=Success`, `FAIL STAGE=NONE`. All controller pointers were cleared before DMA release.
 
 Exit criteria:
 
@@ -83,15 +73,43 @@ Exit criteria:
 - Every controller DMA pointer is cleared before `Unmap()`/`FreeBuffer()`.
 - The sequence is repeatable on the Toshiba without requiring platform-specific IOMMU/VT-d programming.
 
-## Gate 5 — Command-ring completion by polling
+**Gate 4 status: COMPLETE / HARDWARE PASS on Toshiba Satellite P50.**
 
-Submit one Enable Slot command and poll the event ring for its completion. Keep CPU interrupt delivery disabled; polling isolates event-ring correctness from interrupt routing.
+## Gate 5 — One Enable Slot command + polled completion event — CURRENT
+
+V31 is the first command-ring test. It starts from the V30-safe controller baseline and issues exactly one Enable Slot Command. The test keeps CPU interrupt delivery disabled and polls the primary event-ring memory directly for the corresponding Command Completion Event.
+
+Before implementation, cross-check the command-ring and event-ring design against the xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. In particular verify:
+
+- Enable Slot TRB type, Cycle bit, Slot Type and zeroed reserved/other fields.
+- Command-ring segment layout and Link TRB with Toggle Cycle.
+- CRCR pointer/alignment and RCS semantics; do not perform invalid CRCR pointer readback comparisons.
+- Host Controller Doorbell 0 location and value.
+- Command Completion Event type, Completion Code, Slot ID and Command TRB Pointer fields.
+- Event-ring producer cycle state and software dequeue processing.
+- ERDP advancement and IMAN.IP write-one-to-clear semantics while `IMAN.IE=0`.
+- DMA mappings and all controller references remain live until after halt/reset.
+
+V31 sequence:
+
+`halt -> reset -> CNR clear -> validate caps/slot type -> allocate/map DCBAA/scratchpads/command ring/event ring/ERST -> program CONFIG/DCBAAP/CRCR/ERST -> verify ERST state -> disable CPU interrupts -> RS=1 -> HCH=0 -> Doorbell 0 -> poll event ring -> validate Command Completion Event -> advance ERDP/ack IP -> RS=0 -> HCH=1 -> reset -> CNR=0 -> clear controller pointers -> unmap/free DMA`
+
+The command must be the only xHCI command issued. No port reset, Address Device, descriptor transfer, endpoint configuration, USB data transfer, MSI/MSI-X setup, or CPU interrupt handler is permitted.
+
+Safety rule: if a command has been submitted and the controller cannot be confirmed halted, the test must not release DMA mappings. It must retain the mappings and enter the non-returning fatal recovery path.
 
 Exit criteria:
 
-- The completion event is valid and yields a slot ID.
-- Event dequeue acknowledgement works.
-- The controller remains healthy after recovery.
+- Exactly one Enable Slot command is fetched/executed.
+- Exactly one Host Controller Doorbell 0 write is issued.
+- A valid Command Completion Event is observed by polling, with the command TRB pointer matching the submitted command and Completion Code = Success.
+- A valid non-zero Slot ID is returned within MaxSlotsEn.
+- Event dequeue acknowledgement is performed correctly.
+- CPU interrupt delivery remains disabled.
+- The controller halts and resets cleanly after the command.
+- Every controller DMA pointer is cleared before `Unmap()`/`FreeBuffer()`.
+
+**Gate 5 status: DESIGN/IMPLEMENTATION PREPARATION COMPLETE; CI build and post-build review required before Toshiba hardware execution.**
 
 ## Gate 6 — One pre-connected wired keyboard
 
