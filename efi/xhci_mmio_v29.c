@@ -220,9 +220,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     event_dev=crcr_dev+4096U;
     erst_dev=event_dev+8192U;
     if((dcbaa_dev&63ULL)||(spa_dev&63ULL)||(crcr_dev&63ULL)||(event_dev&15ULL)||(erst_dev&63ULL) ||
-       (!ac64 && (dcbaa_dev>0xffffffffULL || spa_dev+0x7ffULL>0xffffffffULL ||
-                   crcr_dev+0xfffULL>0xffffffffULL || event_dev+0xfffULL>0xffffffffULL ||
-                   erst_dev+0xfffULL>0xffffffffULL))) {
+       (!ac64 && (
+           dcbaa_dev > 0xffffffffULL ||
+           dcbaa_dev + (UINT64)dcbaa_pages * 4096ULL - 1ULL > 0xffffffffULL ||
+           spa_dev > 0xffffffffULL ||
+           (scratchpads && spa_dev + (UINT64)scratchpads * sizeof(UINT64) - 1ULL > 0xffffffffULL) ||
+           crcr_dev > 0xffffffffULL || crcr_dev + 4095ULL > 0xffffffffULL ||
+           event_dev > 0xffffffffULL || event_dev + 4095ULL > 0xffffffffULL ||
+           erst_dev > 0xffffffffULL || erst_dev + 15ULL > 0xffffffffULL))) {
         s=EFI_BAD_BUFFER_SIZE; goto teardown;
     }
 
