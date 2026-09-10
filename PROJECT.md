@@ -40,3 +40,6 @@ Before any Run/Stop or DMA, investigate the Toshiba's IOMMU/VT-d state and UEFI 
 
 ### Mandatory xHCI implementation cross-check
 Every xHCI test that changes controller state or implements xHCI data structures must be reviewed against both the applicable xHCI specification and the coreboot/libpayload xHCI implementation. Coreboot is a practical implementation cross-check, not a substitute for the normative specification. Reviews must explicitly check controller reset/initialization sequencing, capability/register interpretation, PAGESIZE, DMA addressing, DCBAA, scratchpad buffers, command/event rings, and controller ownership assumptions where relevant.
+
+### Minimal-driver scope rule
+The Linux/coreboot cross-check is for correctness and edge-case discovery only. It must not expand the project's scope. This project remains a deliberately minimal xHCI/USB HID implementation: adopt only the hardware behavior and safeguards required by our stated design, and do not import unrelated Linux/coreboot features, abstractions, device classes, power-management support, quirks, or general USB functionality merely because those implementations contain them.
