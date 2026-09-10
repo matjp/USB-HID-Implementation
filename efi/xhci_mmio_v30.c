@@ -95,6 +95,11 @@ static void finish(EFI_STATUS s, UINT32 reads, UINT32 writes, UINT32 events) {
     Print(u"EXIT 5 SEC...\r\n");
     uefi_call_wrapper(BS->Stall,1,5000000);
 }
+static void fatal_dma_running(void) {
+    Print(u"\r\nFATAL: XHCI NOT CONFIRMED HALTED\r\n");
+    Print(u"DMA MAPPINGS RETAINED / NO FREE / MANUAL RECOVERY REQUIRED\r\n");
+    for(;;) uefi_call_wrapper(BS->Stall,1,1000000);
+}
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     EFI_HANDLE *hs=NULL; EFI_PCI_IO_PROTOCOL *p=NULL; EFI_STATUS s=EFI_SUCCESS,ts;
@@ -102,10 +107,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT32 opbase=0,rtsoff=0,cmd=0,status=0,config=0,iman=0,events=0; UINT32 reads=0,writes=0;
     UINT32 maxslots=0,scratchpads=0,pagesize_reg=0; UINTN xhci_pagesize=0,page_shift=0;
     UINTN dcbaa_pages=0,spa_pages=0,total_bytes=0,common_pages=0,scratch_block_pages=0;
-    UINT64 dcbaa_dev=0,spa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,erstba_rd=0,erdp_rd=0;
+    UINT64 dcbaa_dev=0,spa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,erstba_rd=0,erdp_rd=0,dcbaa_rd=0;
     VOID *common=NULL,*common_map=NULL,*scratch_block=NULL,*scratch_aligned=NULL,*scratch_map=NULL;
     EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS],scratch_aligned_dev=0;
-    UINT64 *dcbaa,*erst; UINT32 *event_trb; BOOLEAN common_ok=FALSE,reset_done=FALSE,ac64=FALSE;
+    UINT64 *dcbaa,*erst; BOOLEAN common_ok=FALSE,reset_done=FALSE,ac64=FALSE,controller_halted=FALSE;
     UINT32 bar_type; UINTN observation_us=1500000;
 
     InitializeLib(image,st);
@@ -147,11 +152,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
         s=mmio_write32(p,opbase,cmd&~(CMD_RUN|CMD_INTE|CMD_HSEE));writes++;if(EFI_ERROR(s)){remember_failure(u"HALT",u"CLEAR RUN/INTERRUPTS",s);goto out;}
         s=wait_status(p,opbase,STS_HCH,STS_HCH,1000,&status,&reads);if(EFI_ERROR(s)){remember_failure(u"HALT",u"WAIT HCH",s);goto out;}
     }
+    controller_halted=TRUE;
     s=mmio_write32(p,opbase,(cmd&~(CMD_RUN|CMD_INTE|CMD_HSEE))|CMD_RESET);writes++;if(EFI_ERROR(s)){remember_failure(u"RESET",u"SET RESET",s);goto out;}
+    reset_done=FALSE;
     for(t=0;t<1000;t++){s=mmio32(p,opbase,&cmd);reads++;if(EFI_ERROR(s)){remember_failure(u"RESET",u"POLL RESET",s);goto out;}if(!(cmd&CMD_RESET)){reset_done=TRUE;break;}uefi_call_wrapper(BS->Stall,1,1000);}
     if(!reset_done){s=EFI_TIMEOUT;remember_failure(u"RESET",u"WAIT RESET CLEAR",s);goto out;}
     s=wait_status(p,opbase,STS_CNR,0,10000,&status,&reads);if(EFI_ERROR(s)){remember_failure(u"RESET",u"WAIT CNR CLEAR",s);goto out;}
-    if(!(status&STS_HCH)){s=EFI_DEVICE_ERROR;remember_failure(u"RESET",u"VERIFY HALTED",s);goto out;}
+    if(!(status&STS_HCH)){controller_halted=FALSE;s=EFI_DEVICE_ERROR;remember_failure(u"RESET",u"VERIFY HALTED",s);goto out;}
 
     dcbaa_pages=((maxslots+1U)*sizeof(UINT64)+4095U)/4096U;
     spa_pages=(scratchpads*sizeof(UINT64)+xhci_pagesize-1U)/xhci_pagesize;if(!spa_pages)spa_pages=1;
@@ -184,6 +191,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
 
     s=mmio_write32(p,opbase+0x38,1);writes++;if(EFI_ERROR(s)){remember_failure(u"CONFIG",u"WRITE",s);goto teardown;}
     s=mmio_write64_split(p,opbase+0x30,dcbaa_dev);writes++;if(EFI_ERROR(s)){remember_failure(u"DCBAA",u"WRITE",s);goto teardown;}
+    s=mmio64_split(p,opbase+0x30,&dcbaa_rd);reads+=2;if(EFI_ERROR(s)){remember_failure(u"DCBAA",u"READBACK",s);goto teardown;}
+    if(dcbaa_rd!=dcbaa_dev){s=EFI_DEVICE_ERROR;remember_failure(u"DCBAA",u"VERIFY READBACK",s);goto teardown;}
     s=mmio_write64_split(p,opbase+0x18,crcr_dev|CRCR_RCS);writes++;if(EFI_ERROR(s)){remember_failure(u"CRCR",u"WRITE",s);goto teardown;}
     s=mmio32(p,0x18,&rtsoff);reads++;if(EFI_ERROR(s)){remember_failure(u"EVENT-RING",u"READ RTSOFF",s);goto teardown;}
     {UINT32 ib=rtsoff+0x20;
@@ -204,16 +213,22 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     if((cmd&(CMD_RUN|CMD_INTE|CMD_HSEE))||(status&STS_CNR)||!(status&STS_HCH)){s=EFI_DEVICE_ERROR;remember_failure(u"PRE-RUN",u"VERIFY HALTED/INTERRUPTS",s);goto teardown;}
     Print(u"PRE-RUN: HCH=1 CNR=0 CONFIG=1 IMAN.IE=0 CPU-INT=0\r\n");
 
-    s=mmio_write32(p,opbase,CMD_RUN);writes++;if(EFI_ERROR(s)){remember_failure(u"RUN",u"SET RUN",s);goto teardown;}
-    s=wait_status(p,opbase,STS_HCH,0,2000,&status,&reads);if(EFI_ERROR(s)){remember_failure(u"RUN",u"WAIT HCH CLEAR",s);goto stop;}
+    s=mmio_write32(p,opbase,(cmd&~(CMD_RUN|CMD_INTE|CMD_HSEE))|CMD_RUN);writes++;if(EFI_ERROR(s)){remember_failure(u"RUN",u"SET RUN",s);goto teardown;}
+    controller_halted=FALSE;
+    s=wait_status(p,opbase,STS_HCH,0,2000,&status,&reads);if(EFI_ERROR(s)){remember_failure(u"RUN",u"WAIT HCH CLEAR",s);goto running_failure;}
     Print(u"RUN: HCH=0 PASS\r\n");
     uefi_call_wrapper(BS->Stall,1,observation_us);
     s=mmio32(p,opbase+4,&status);reads++;if(EFI_ERROR(s)){remember_failure(u"RUN",u"READ USBSTS",s);goto stop;}
-    if(status&STS_HSE){remember_failure(u"RUN",u"HOST SYSTEM ERROR",EFI_DEVICE_ERROR);s=EFI_DEVICE_ERROR;goto stop;}
+    if(status&STS_HSE){remember_failure(u"RUN",u"HOST SYSTEM ERROR",EFI_DEVICE_ERROR);s=EFI_DEVICE_ERROR;}
 
 stop:
-    ts=mmio_write32(p,opbase,0);writes++;if(EFI_ERROR(ts)){remember_failure(u"HALT",u"CLEAR RUN",ts);if(!EFI_ERROR(s))s=ts;}
+    ts=mmio32(p,opbase,&cmd);reads++;if(EFI_ERROR(ts)){remember_failure(u"HALT",u"READ USBCMD",ts);if(!EFI_ERROR(s))s=ts;}
+    if(!EFI_ERROR(ts)){
+        ts=mmio_write32(p,opbase,cmd&~(CMD_RUN|CMD_INTE|CMD_HSEE));writes++;if(EFI_ERROR(ts)){remember_failure(u"HALT",u"CLEAR RUN",ts);if(!EFI_ERROR(s))s=ts;}
+    }
     ts=wait_status(p,opbase,STS_HCH,STS_HCH,2000,&status,&reads);if(EFI_ERROR(ts)){remember_failure(u"HALT",u"WAIT HCH",ts);if(!EFI_ERROR(s))s=ts;}
+    if(!EFI_ERROR(ts))controller_halted=TRUE;
+    if(!controller_halted) goto running_failure;
     if(!EFI_ERROR(s))Print(u"HALT: HCH=1 PASS\r\n");
     ts=mmio32(p,rtsoff+0x20,&iman);reads++;if(!EFI_ERROR(ts)&&((iman&IMAN_IP)!=0))events=1;
     if(!EFI_ERROR(ts)&&events)Print(u"EVENT-RING: activity observed (not consumed)\r\n");
@@ -222,18 +237,30 @@ stop:
     ts=mmio32(p,opbase,&cmd);reads++;if(EFI_ERROR(ts)){remember_failure(u"HALT",u"READ USBCMD",ts);if(!EFI_ERROR(s))s=ts;}
     ts=mmio32(p,opbase+4,&status);reads++;if(EFI_ERROR(ts)){remember_failure(u"HALT",u"READ USBSTS",ts);if(!EFI_ERROR(s))s=ts;}
     if(!EFI_ERROR(s)&&((cmd&CMD_RUN)||(status&STS_CNR)||!(status&STS_HCH))){s=EFI_DEVICE_ERROR;remember_failure(u"HALT",u"VERIFY HALTED",s);}
-    if(!EFI_ERROR(s)){
-        s=mmio_write32(p,opbase,CMD_RESET);writes++;if(EFI_ERROR(s)){remember_failure(u"RESET",u"SET RESET",s);goto teardown;}
-        for(t=0;t<1000;t++){ts=mmio32(p,opbase,&cmd);reads++;if(EFI_ERROR(ts)){remember_failure(u"RESET",u"POLL RESET",ts);s=ts;goto teardown;}if(!(cmd&CMD_RESET)){reset_done=TRUE;break;}uefi_call_wrapper(BS->Stall,1,1000);}
-        if(!reset_done){s=EFI_TIMEOUT;remember_failure(u"RESET",u"WAIT RESET CLEAR",s);goto teardown;}
-        ts=wait_status(p,opbase,STS_CNR,0,10000,&status,&reads);if(EFI_ERROR(ts)){remember_failure(u"RESET",u"WAIT CNR CLEAR",ts);s=ts;goto teardown;}
-        if(!(status&STS_HCH)){s=EFI_DEVICE_ERROR;remember_failure(u"RESET",u"VERIFY HALTED",s);goto teardown;}
-        Print(u"RESET: CNR=0 HCH=1 PASS\r\n");
+    if(controller_halted){
+        reset_done=FALSE;
+        ts=mmio_write32(p,opbase,CMD_RESET);writes++;if(EFI_ERROR(ts)){remember_failure(u"RESET",u"SET RESET",ts);if(!EFI_ERROR(s))s=ts;}
+        if(!EFI_ERROR(ts)){
+            for(t=0;t<1000;t++){ts=mmio32(p,opbase,&cmd);reads++;if(EFI_ERROR(ts)){remember_failure(u"RESET",u"POLL RESET",ts);break;}if(!(cmd&CMD_RESET)){reset_done=TRUE;break;}uefi_call_wrapper(BS->Stall,1,1000);}
+            if(!reset_done&&!EFI_ERROR(ts)){ts=EFI_TIMEOUT;remember_failure(u"RESET",u"WAIT RESET CLEAR",ts);}
+            if(!EFI_ERROR(ts)){
+                ts=wait_status(p,opbase,STS_CNR,0,10000,&status,&reads);if(EFI_ERROR(ts))remember_failure(u"RESET",u"WAIT CNR CLEAR",ts);
+                if(!EFI_ERROR(ts)&&!(status&STS_HCH)){controller_halted=FALSE;ts=EFI_DEVICE_ERROR;remember_failure(u"RESET",u"VERIFY HALTED",ts);}
+            }
+            if(EFI_ERROR(ts)&&!EFI_ERROR(s))s=ts;
+        }
+        if(!EFI_ERROR(s))Print(u"RESET: CNR=0 HCH=1 PASS\r\n");
     }
     if(!EFI_ERROR(s))Print(u"V30 CONTROLLER START: PASS\r\n");
+    goto teardown;
+
+running_failure:
+    remember_failure(u"FATAL",u"CONTROLLER NOT HALTED",EFI_DEVICE_ERROR);
+    fatal_dma_running();
 
 teardown:
     {EFI_STATUS original=s;
+      if(common_ok&&!controller_halted) fatal_dma_running();
       if(p&&opbase){
         ts=mmio_write64_split(p,opbase+0x18,0);writes+=EFI_ERROR(ts)?0:1;if(EFI_ERROR(ts))remember_failure(u"CLEANUP",u"CLEAR CRCR",ts);
         ts=mmio_write64_split(p,opbase+0x30,0);writes+=EFI_ERROR(ts)?0:1;if(EFI_ERROR(ts))remember_failure(u"CLEANUP",u"CLEAR DCBAAP",ts);
