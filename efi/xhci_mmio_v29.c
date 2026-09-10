@@ -108,9 +108,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
     VOID *common=NULL,*scratch_host[MAX_SCRATCHPADS];
     VOID *common_map=NULL,*scratch_map[MAX_SCRATCHPADS];
-    VOID *scratch_block=NULL;
+    VOID *scratch_block=NULL,*scratch_aligned=NULL;
     VOID *scratch_block_map=NULL;
-    EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS],scratch_block_dev=0;
+    EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
+    EFI_PHYSICAL_ADDRESS scratch_block_dev=0,scratch_aligned_dev=0;
     UINT64 *dcbaa;
     UINT64 *erst;
     UINTN scratch_pages=0;
@@ -268,21 +269,21 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             UINT64 aligned_dev=(scratch_block_dev+(UINT64)xhci_pagesize-1ULL) &
                                ~((UINT64)xhci_pagesize-1ULL);
             UINTN delta=(UINTN)(aligned_dev-scratch_block_dev);
-            scratch_block=(UINT8*)scratch_block+delta;
-            scratch_block_dev=aligned_dev;
+            scratch_aligned=(UINT8*)scratch_block+delta;
+            scratch_aligned_dev=aligned_dev;
         }
         /* xHCI requires each scratchpad buffer to be cleared before Run.
            This test never enters Run, but establish the required invariant
            now without touching the buffers after handoff to the controller. */
-        uefi_call_wrapper(BS->SetMem,3,scratch_block,
+        uefi_call_wrapper(BS->SetMem,3,scratch_aligned,
                           scratchpads*xhci_pagesize,0);
         if(!ac64 && scratch_block_dev +
             (UINT64)scratchpads*xhci_pagesize - 1ULL > 0xffffffffULL) {
             s=EFI_BAD_BUFFER_SIZE; goto teardown;
         }
         for(j=0;j<scratchpads;j++) {
-            scratch_host[j]=(UINT8*)scratch_block + j*xhci_pagesize;
-            scratch_dev[j]=scratch_block_dev + (UINT64)j*xhci_pagesize;
+            scratch_host[j]=(UINT8*)scratch_aligned + j*xhci_pagesize;
+            scratch_dev[j]=scratch_aligned_dev + (UINT64)j*xhci_pagesize;
             scratch_map[j]=NULL;
         }
         scratch_pages=scratchpads;
