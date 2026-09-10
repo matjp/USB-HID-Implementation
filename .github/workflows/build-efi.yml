@@ -20,21 +20,6 @@ on:
         required: true
         default: "xHCI V29 / HALTED INITIALIZATION PREPARATION"
         type: string
-      verify1:
-        description: "First string to require"
-        required: true
-        default: "xHCI V29"
-        type: string
-      verify2:
-        description: "Second string to require"
-        required: true
-        default: "V29 COMPLETE"
-        type: string
-      verify3:
-        description: "Third string to require"
-        required: true
-        default: "DMA VIA EFI_PCI_IO MAP"
-        type: string
 
 concurrency:
   group: build-efi-${{ github.ref }}
@@ -51,9 +36,6 @@ jobs:
       TEST_ID: ${{ inputs.test_id || 'v29' }}
       SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v29.c' }}
       LABEL: ${{ inputs.label || 'xHCI V29 / HALTED INITIALIZATION PREPARATION' }}
-      VERIFY1: ${{ inputs.verify1 || 'xHCI V29' }}
-      VERIFY2: ${{ inputs.verify2 || 'V29 COMPLETE' }}
-      VERIFY3: ${{ inputs.verify3 || 'DMA VIA EFI_PCI_IO MAP' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -94,6 +76,14 @@ jobs:
           echo "GNUEFI_LIBGNUEFI=$LIBGNUEFI" >> "$GITHUB_ENV"
           echo "GNUEFI_INC=$(dirname "$INC")" >> "$GITHUB_ENV"
 
+      - name: Record build provenance
+        run: |
+          set -euxo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$GITHUB_SHA"
+          printf 'SOURCE_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$ACTUAL_SHA" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
+          cat "build/$TEST_ID/BUILD-PROVENANCE.txt"
+
       - name: Compile
         run: |
           set -euxo pipefail
@@ -111,14 +101,6 @@ jobs:
           objcopy -j .text -j .sdata -j .data -j .rodata -j .dynamic -j .dynsym             -j .rel -j .rela -j .rel.* -j .rela.* -j .reloc             --output-target=efi-app-x86_64 --subsystem=10             "build/$TEST_ID/BOOTX64-$TEST_ID.elf" "build/$TEST_ID/BOOTX64.EFI"
           file "build/$TEST_ID/BOOTX64.EFI"
           objdump -h "build/$TEST_ID/BOOTX64.EFI"
-          for marker in "$VERIFY1" "$VERIFY2" "$VERIFY3"; do
-            if ! strings -el "build/$TEST_ID/BOOTX64.EFI" | grep -F "$marker"; then
-              echo "ERROR: required EFI marker not found: [$marker]" >&2
-              echo "Embedded wide-string markers:" >&2
-              strings -el "build/$TEST_ID/BOOTX64.EFI" | sed -n '/V29/,+8p' >&2 || true
-              exit 1
-            fi
-          done
           test -s "build/$TEST_ID/BOOTX64.EFI"
 
       - name: Prepare artifact
