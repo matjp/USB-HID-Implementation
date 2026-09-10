@@ -106,23 +106,20 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
     UINTN xhci_pagesize=0, dcbaa_pages=0, spa_pages=0, common_pages=0, page_shift=0, total_bytes=0, scratch_alloc_pages=0;
     UINT64 dcbaa_dev=0,crcr_dev=0,event_dev=0,erst_dev=0,spa_dev=0;
     UINT64 dcbaa_rd=0,crcr_rd=0,erstba_rd=0,erdp_rd=0;
-    VOID *common=NULL,*scratch_host[MAX_SCRATCHPADS];
-    VOID *common_map=NULL,*scratch_map[MAX_SCRATCHPADS];
+    VOID *common=NULL;
+    VOID *common_map=NULL;
     VOID *scratch_block=NULL,*scratch_aligned=NULL;
     VOID *scratch_block_map=NULL;
     EFI_PHYSICAL_ADDRESS common_dev=0,scratch_dev[MAX_SCRATCHPADS];
     EFI_PHYSICAL_ADDRESS scratch_block_dev=0,scratch_aligned_dev=0;
     UINT64 *dcbaa;
     UINT64 *erst;
-    UINTN scratch_pages=0;
     UINTN scratch_block_pages=0;
     UINTN t;
     BOOLEAN common_ok=FALSE, halted=FALSE, reset_done=FALSE, ac64=FALSE;
     UINT32 bar_type;
 
     InitializeLib(image,st);
-    uefi_call_wrapper(BS->SetMem,3,scratch_host,sizeof(scratch_host),0);
-    uefi_call_wrapper(BS->SetMem,3,scratch_map,sizeof(scratch_map),0);
     uefi_call_wrapper(BS->SetMem,3,scratch_dev,sizeof(scratch_dev),0);
 
     Print(u"TOSHIBA xHCI V29 / HALTED INITIALIZATION PREPARATION\r\n");
@@ -282,11 +279,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st) {
             s=EFI_BAD_BUFFER_SIZE; goto teardown;
         }
         for(j=0;j<scratchpads;j++) {
-            scratch_host[j]=(UINT8*)scratch_aligned + j*xhci_pagesize;
             scratch_dev[j]=scratch_aligned_dev + (UINT64)j*xhci_pagesize;
-            scratch_map[j]=NULL;
         }
-        scratch_pages=scratchpads;
         {
             UINT64 *spa=(UINT64*)((UINT8*)common+(spa_dev-common_dev));
             for(j=0;j<scratchpads;j++) spa[j]=scratch_dev[j];
