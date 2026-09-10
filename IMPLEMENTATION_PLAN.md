@@ -4,7 +4,7 @@ Each gate has a narrow objective and explicit exit criteria. A failed or ambiguo
 
 ## Gate 0 — Evidence and platform baseline
 
-Reject any controller reporting HCIVERSION < 1.0 before initialization. Reconcile the experiment history, retain the known-good read-only output, and complete the unknown Toshiba fields in `PLATFORM.md` that affect initialization: firmware, scratchpads, context size, legacy ownership, IOMMU state, external test keyboard, boot medium, and recovery procedure.
+Reject any controller reporting HCIVERSION < 1.0 before initialization. Reconcile the experiment history, retain the known-good read-only output, and complete the unknown Toshiba fields in `PLATFORM.md` that affect initialization: firmware, scratchpads, context size, legacy ownership, external test keyboard, boot medium, and recovery procedure.
 
 Exit criteria:
 
@@ -15,11 +15,14 @@ Exit criteria:
 
 ## Gate 1 — DMA contract
 
-Create a small DMA abstraction that records the CPU allocation, device-visible address, allocation size, alignment, and release operation. Do not assume that a UEFI physical address is automatically the address usable by xHCI DMA. Use the PCI I/O mapping facility or document verified identity mapping.
+Create a small DMA abstraction that records the CPU allocation, device-visible address, allocation size, alignment, and release operation. Do not assume that a UEFI physical address is automatically the address usable by xHCI DMA. Use the UEFI PCI I/O mapping facility and treat the returned `DeviceAddress` as authoritative for controller DMA.
+
+The portable contract is platform-neutral: the bridge does not inspect or depend on a particular machine's IOMMU/VT-d configuration. UEFI/PCI firmware owns the platform-specific DMA mapping. The bridge must keep each mapping live for the entire period in which the controller can reference it and must not release it until controller references have been cleared or the controller has been reset into a state where those references are no longer active.
 
 Exit criteria:
 
-- Every controller-programmed pointer is traceable to a live DMA allocation.
+- Every controller-programmed pointer is traceable to a live DMA allocation and its UEFI mapping.
+- Controller DMA uses only device-visible addresses returned by the UEFI mapping interface.
 - Buffer memory remains live until controller references are cleared or a reset makes them invalid.
 - No test uses the Dell for DMA work.
 
@@ -56,15 +59,29 @@ Exit criteria:
 
 ## Gate 4 — Controller start without commands — NEXT
 
-Before implementation, complete the required design and implementation reviews against the applicable xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. Resolve the Toshiba IOMMU/VT-d and DMA ownership/mapping conditions relevant to a running controller.
+The Gate 4 design is portable and does **not** require prior discovery of the Toshiba's Linux-visible IOMMU/VT-d state. UEFI is the platform abstraction: the test uses `EFI_PCI_IO_PROTOCOL.AllocateBuffer()` plus `Map(EfiPciIoOperationBusMasterCommonBuffer)` and programs xHCI only with the resulting device-visible addresses. The UEFI DMA mapping/ownership contract, rather than a Toshiba-specific IOMMU configuration, is the prerequisite.
 
-Retain valid ring memory, enable only the required event-ring state, start the controller, and observe that it reaches the expected running state. Do not submit a command, ring a doorbell, or enable CPU interrupt delivery.
+The required design and implementation reviews must still be completed against the applicable xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. Platform-specific DMA behavior is recorded only when needed to explain a UEFI mapping failure or unexpected hardware result; it is not a portability requirement.
+
+Retain valid ring memory and mappings, enable only the required primary event-ring state, start the controller, and observe that it reaches the expected running state. Do not submit a command, ring a doorbell, or enable CPU interrupt delivery. Poll status only; do not consume or acknowledge event-ring entries in Gate 4.
+
+Gate 4 sequence:
+
+`V29 halt/reset/init -> retain DMA mappings -> verify CONFIG/DCBAAP/CRCR/event-ring state -> verify interrupts disabled -> RS=1 -> wait HCH=0 -> observe briefly -> RS=0 -> wait HCH=1 -> reset -> CNR clear -> clear controller pointers -> unmap/free DMA`
+
+Before `RS=1`, explicitly verify `CONFIG=1`, valid mapped `DCBAAP`, valid command-ring state, `ERSTSZ=1`, valid mapped `ERSTBA`/`ERDP`, `IMAN.IE=0`, `USBCMD.EIE=0`, `USBCMD.HSEIE=0`, `HCH=1`, and `CNR=0`. The controller must be allowed to run with all DMA allocations and mappings alive. No Enable Slot, port reset, Address Device, descriptor transfer, USB transfer, MSI/MSI-X setup, CPU interrupt handler, PCI BAR change, IOMMU programming, or doorbell is permitted.
+
+An event-ring write by the running controller is not itself a Gate 4 failure; Gate 4 does not interpret or consume events. The test only establishes that the controller can start, remain a live bus master for the observation window, and recover cleanly.
 
 Exit criteria:
 
-- The controller starts without host-system error or unexpected reset.
-- The event-ring and DMA lifetime model remains valid while running.
-- Halt/reset recovery is repeatable.
+- The controller starts without host-system error or unexpected reset and reaches `HCH=0`.
+- The controller remains able to reference its mapped DMA structures for the full running interval.
+- CPU interrupt delivery remains disabled.
+- No command or doorbell is issued.
+- The controller halts on `RS=0`, then resets cleanly with `CNR` returning to 0.
+- Every controller DMA pointer is cleared before `Unmap()`/`FreeBuffer()`.
+- The sequence is repeatable on the Toshiba without requiring platform-specific IOMMU/VT-d programming.
 
 ## Gate 5 — Command-ring completion by polling
 
