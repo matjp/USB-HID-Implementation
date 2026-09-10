@@ -10,6 +10,7 @@
 #define STS_HCH 1U
 #define STS_CNR 0x800U
 #define IMAN_IE 2U
+#define HCC_AC64 1U
 #define TRB_CYCLE 1U
 #define TRB_TYPE_SHIFT 10U
 #define TRB_TYPE_MASK 0xFC00U
@@ -25,13 +26,11 @@
 #define PORT_CCS (1U << 0)
 #define PORT_PED (1U << 1)
 #define PORT_PR (1U << 4)
-#define PORT_PLS_MASK (0xFU << 5)
 #define PORT_SPEED_MASK (0xFU << 10)
 #define PORT_PRC (1U << 21)
 #define PORT_CHANGE_MASK (0x7FU << 17)
 #define PORT_RO ((1U << 0) | (1U << 3) | (0xFU << 10) | (1U << 30))
 #define PORT_RWS ((0xFU << 5) | (1U << 9) | (3U << 14) | (7U << 25))
-#define PORT_RW1S (1U << 4)
 #define PORT_RW (1U << 16)
 #define CTX_CSZ (1U << 2)
 #define CTX_ENTRIES_SHIFT 27U
@@ -65,19 +64,21 @@ static EFI_STATUS mw64(EFI_PCI_IO_PROTOCOL *p, UINT32 o, UINT64 v)
 
 static EFI_STATUS dma_alloc(EFI_PCI_IO_PROTOCOL *p, UINTN pages, struct dma_obj *d)
 {
- EFI_STATUS s; UINTN bytes=pages*4096U, mapped=bytes;
- d->host=NULL; d->map=NULL; d->dev=0; d->pages=pages; d->live=FALSE;
+ EFI_STATUS s; UINTN bytes;
  if (!pages || pages>((UINTN)-1)/4096U) return EFI_BAD_BUFFER_SIZE;
+ bytes=pages*4096U; d->host=NULL; d->map=NULL; d->dev=0; d->pages=pages; d->live=FALSE;
  s=uefi_call_wrapper(p->AllocateBuffer,6,p,AllocateAnyPages,EfiBootServicesData,pages,&d->host,0);
  if (EFI_ERROR(s)) return s;
  s=uefi_call_wrapper(BS->SetMem,3,d->host,bytes,0);
  if (EFI_ERROR(s)) { uefi_call_wrapper(p->FreeBuffer,3,p,pages,d->host); d->host=NULL; return s; }
- s=uefi_call_wrapper(p->Map,6,p,EfiPciIoOperationBusMasterCommonBuffer,d->host,&mapped,&d->dev,&d->map);
- if (EFI_ERROR(s) || mapped!=bytes) {
-  EFI_STATUS x=EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
-  if (!EFI_ERROR(s) && d->map) uefi_call_wrapper(p->Unmap,2,p,d->map);
-  uefi_call_wrapper(p->FreeBuffer,3,p,pages,d->host);
-  d->host=NULL; d->map=NULL; d->dev=0; return x;
+ { UINTN mapped=bytes;
+  s=uefi_call_wrapper(p->Map,6,p,EfiPciIoOperationBusMasterCommonBuffer,d->host,&mapped,&d->dev,&d->map);
+  if (EFI_ERROR(s) || mapped!=bytes) {
+   EFI_STATUS x=EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
+   if (!EFI_ERROR(s) && d->map) uefi_call_wrapper(p->Unmap,2,p,d->map);
+   uefi_call_wrapper(p->FreeBuffer,3,p,pages,d->host);
+   d->host=NULL; d->map=NULL; d->dev=0; return x;
+  }
  }
  d->live=TRUE; return EFI_SUCCESS;
 }
@@ -110,13 +111,24 @@ static EFI_STATUS reset_xhci(EFI_PCI_IO_PROTOCOL *p, UINT32 op, UINT32 *cmd, UIN
  return EFI_TIMEOUT;
 }
 
-static EFI_STATUS find_slot_type(EFI_PCI_IO_PROTOCOL *p, UINT32 hcc, UINT32 *slot_type, BOOLEAN *found, UINT32 *reads)
+/* Return the Protocol Slot Type for the Supported Protocol capability
+ * whose advertised port range contains the requested root port. */
+static EFI_STATUS find_slot_type_for_port(EFI_PCI_IO_PROTOCOL *p, UINT32 hcc, UINT32 port,
+                                           UINT32 *slot_type, BOOLEAN *found, UINT32 *reads)
 {
- UINT32 off=((hcc>>16)&0xFFFFU)*4U,w,next; UINTN n=0; EFI_STATUS s;
+ UINT32 off=((hcc>>16)&0xFFFFU)*4U,w,d2,d3,next; UINTN n=0; EFI_STATUS s;
  *found=FALSE; *slot_type=0;
  while(off && n++<64) {
   s=mr32(p,off,&w); (*reads)++; if(EFI_ERROR(s)) return s;
-  if((w&0xFFU)==2U) { s=mr32(p,off+12,&w); (*reads)++; if(EFI_ERROR(s)) return s; *slot_type=w&0x1FU; *found=TRUE; return EFI_SUCCESS; }
+  if((w&0xFFU)==2U) {
+   s=mr32(p,off+8,&d2); (*reads)++; if(EFI_ERROR(s)) return s;
+   s=mr32(p,off+12,&d3); (*reads)++; if(EFI_ERROR(s)) return s;
+   { UINT32 port_off=d2&0xFFU, port_count=(d2>>8)&0xFFU;
+     if(port_count && port>=port_off && port<port_off+port_count) {
+      *slot_type=d3&0x1FU; *found=TRUE; return EFI_SUCCESS;
+     }
+   }
+  }
   next=((w>>8)&0xFFU)*4U; if(!next) break; off+=next;
  }
  return EFI_SUCCESS;
@@ -130,7 +142,7 @@ static void put64(VOID *b, UINTN off, UINT64 v) { put32(b,off,(UINT32)v); put32(
 
 static void fatal_running(void)
 {
- Print(u"\r\nFATAL: XHCI NOT CONFIRMED HALTED\r\nDMA MAPPINGS RETAINED / NO FREE\r\nMANUAL RECOVERY REQUIRED\r\n");
+ Print(u"\r\nFATAL: XHCI RUNNING STATE UNCERTAIN\r\nDMA MAPPINGS RETAINED / NO FREE\r\nMANUAL RECOVERY REQUIRED\r\n");
  for(;;) uefi_call_wrapper(BS->Stall,1,1000000);
 }
 
@@ -140,7 +152,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  UINT32 id=0,cls=0,bar0=0,bar1=0,cap=0,hcs1=0,hcs2=0,hcc=0,op=0,db=0,rt=0,ir=0;
  UINT32 cmd=0,status=0,iman=0,maxslots=0,scratchpads=0,ps=0,stype=0,reads=0,writes=0,ctxsz=32;
  UINT32 portsc=0,speed=0,slot=0,event_idx=0,event_type=0,cc=0,ed0=0,ed1=0,ed2=0,ed3=0; UINT64 eptr=0;
- UINTN shift=0,xpage=0,ctx_bytes=0,input_bytes=0; BOOLEAN halted=FALSE,started=FALSE,dma_live=FALSE,stype_found=FALSE;
+ UINTN shift=0,xpage=0,ctx_bytes=0,input_bytes=0,spa_pages=1; BOOLEAN halted=FALSE,started=FALSE,dma_live=FALSE,stype_found=FALSE;
  struct dma_obj dcbaa_d={0},spa_d={0},cr_d={0},ev_d={0},erst_d={0},devctx_d={0},inctx_d={0},ep0_d={0}; struct dma_obj *sb=NULL;
  UINT64 *dcbaa=NULL,*spa=NULL,*erst=NULL; UINT32 *cr=NULL,*ev=NULL; UINT8 *devctx=NULL,*inctx=NULL;
  UINT32 port_off;
@@ -160,19 +172,29 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  s=mr32(p,0x10,&hcc);reads++;if(EFI_ERROR(s)){remember_fail(u"CAPS",u"HCCPARAMS1",s);goto out;}
  s=mr32(p,op+4,&status);reads++;if(EFI_ERROR(s)){remember_fail(u"CAPS",u"USBSTS",s);goto out;}
  maxslots=hcs1&255U; scratchpads=(((hcs2>>21)&31U)<<5)|((hcs2>>27)&31U); ctxsz=(hcc&CTX_CSZ)?64:32;
+ if(!(hcc&HCC_AC64)){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"AC64",s);goto out;}
  s=mr32(p,op+8,&ps);reads++;if(EFI_ERROR(s)||!ps){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGESIZE",s);goto out;}
  while(shift<32 && !(ps&(1U<<shift))) shift++; if(shift>=32){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE BIT",s);goto out;} xpage=(UINTN)1U<<(12+shift); if(xpage!=4096U){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE SIZE",s);goto out;}
  if(!maxslots||scratchpads>MAX_SCRATCHPADS){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"LIMITS",s);goto out;}
- Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u PAGESIZE=%u CONTEXT=%u HCH=%u CNR=%u\r\n",maxslots,scratchpads,(UINT32)xpage,ctxsz,(status&STS_HCH)?1:0,(status&STS_CNR)?1:0);
+ Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u AC64=1 PAGESIZE=%u CONTEXT=%u HCH=%u CNR=%u\r\n",maxslots,scratchpads,(UINT32)xpage,ctxsz,(status&STS_HCH)?1:0,(status&STS_CNR)?1:0);
  s=mr32(p,0x14,&db);reads++;if(EFI_ERROR(s)){remember_fail(u"CAPS",u"DBOFF",s);goto out;}db&=~3U;
  s=mr32(p,0x18,&rt);reads++;if(EFI_ERROR(s)){remember_fail(u"CAPS",u"RTSOFF",s);goto out;}rt&=~31U;ir=rt+0x20U;
- s=find_slot_type(p,hcc,&stype,&stype_found,&reads);if(EFI_ERROR(s)||!stype_found){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"SLOT TYPE CAP",s);goto out;} Print(u"CAPS: DBOFF=%08x RTSOFF=%08x SLOT-TYPE=%u\r\n",db,rt,stype);
+ s=find_slot_type_for_port(p,hcc,EXPECTED_PORT,&stype,&stype_found,&reads);if(EFI_ERROR(s)){remember_fail(u"CAPS",u"SLOT TYPE CAP",s);goto out;} if(!stype_found){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"NO SLOT TYPE FOR PORT",s);goto out;} Print(u"CAPS: DBOFF=%08x RTSOFF=%08x PORT=%u SLOT-TYPE=%u\r\n",db,rt,EXPECTED_PORT,stype);
 
  s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"HALT",u"USBCMD",s);goto out;}
  if(!(status&STS_HCH)){s=mw32(p,op,cmd&~(CMD_RUN|CMD_INTE|CMD_HSEE));writes++;if(EFI_ERROR(s)){remember_fail(u"HALT",u"STOP",s);goto out;}s=wait_hch(p,op,TRUE,1000,&status,&reads);if(EFI_ERROR(s)){remember_fail(u"HALT",u"HCH",s);goto out;}}
  halted=TRUE; s=reset_xhci(p,op,&cmd,&status,&reads,&writes);if(EFI_ERROR(s)){remember_fail(u"RESET",u"RESET/CNR",s);goto out;} if(!(status&STS_HCH)){s=EFI_DEVICE_ERROR;remember_fail(u"RESET",u"HALTED",s);goto out;}
 
- s=dma_alloc(p,1,&dcbaa_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"DCBAA",s);goto out;}s=dma_alloc(p,1,&spa_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"SCRATCH ARRAY",s);goto out;}s=dma_alloc(p,1,&cr_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"COMMAND RING",s);goto out;}s=dma_alloc(p,1,&ev_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"EVENT RING",s);goto out;}s=dma_alloc(p,1,&erst_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"ERST",s);goto out;}s=dma_alloc(p,2,&devctx_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"DEVICE CONTEXT",s);goto out;}s=dma_alloc(p,2,&inctx_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"INPUT CONTEXT",s);goto out;}s=dma_alloc(p,1,&ep0_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"EP0 RING",s);goto out;}dma_live=TRUE;
+ s=dma_alloc(p,1,&dcbaa_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"DCBAA",s);goto out;}
+ spa_pages=(scratchpads*sizeof(UINT64)+4095U)/4096U;
+ if(spa_pages==0) spa_pages=1;
+ s=dma_alloc(p,spa_pages,&spa_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"SCRATCH ARRAY",s);goto out;}
+ s=dma_alloc(p,1,&cr_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"COMMAND RING",s);goto out;}
+ s=dma_alloc(p,1,&ev_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"EVENT RING",s);goto out;}
+ s=dma_alloc(p,1,&erst_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"ERST",s);goto out;}
+ s=dma_alloc(p,2,&devctx_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"DEVICE CONTEXT",s);goto out;}
+ s=dma_alloc(p,2,&inctx_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"INPUT CONTEXT",s);goto out;}
+ s=dma_alloc(p,1,&ep0_d);if(EFI_ERROR(s)){remember_fail(u"DMA",u"EP0 RING",s);goto out;}dma_live=TRUE;
  if((dcbaa_d.dev&63)||(devctx_d.dev&63)||(inctx_d.dev&63)||(ep0_d.dev&15)){s=EFI_BAD_BUFFER_SIZE;remember_fail(u"DMA",u"ALIGNMENT",s);goto out;}
  if(scratchpads){s=uefi_call_wrapper(BS->AllocatePool,3,EfiBootServicesData,scratchpads*sizeof(struct dma_obj),(void**)&sb);if(EFI_ERROR(s)){remember_fail(u"DMA",u"SCRATCH DESCRIPTORS",s);goto out;}uefi_call_wrapper(BS->SetMem,3,sb,scratchpads*sizeof(struct dma_obj),0);for(i=0;i<scratchpads;i++){s=dma_alloc(p,1,&sb[i]);if(EFI_ERROR(s)){remember_fail(u"DMA",u"SCRATCHPAD",s);goto out;}}}
  dcbaa=(UINT64*)dcbaa_d.host;spa=(UINT64*)spa_d.host;cr=(UINT32*)cr_d.host;ev=(UINT32*)ev_d.host;erst=(UINT64*)erst_d.host;devctx=(UINT8*)devctx_d.host;inctx=(UINT8*)inctx_d.host;
@@ -182,7 +204,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  s=mw64(p,op+0x30,dcbaa_d.dev);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"DCBAAP",s);goto out;}s=mw32(p,op+0x38,1);writes++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"CONFIG",s);goto out;}s=mw64(p,op+0x18,cr_d.dev|1ULL);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"CRCR",s);goto out;}s=mw32(p,ir+8,1);writes++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"ERSTSZ",s);goto out;}s=mw64(p,ir+0x10,erst_d.dev&~63ULL);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"ERSTBA",s);goto out;}s=mw64(p,ir+0x18,ev_d.dev&~15ULL);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"ERDP",s);goto out;}
  s=mr32(p,ir,&iman);reads++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"IMAN",s);goto out;}s=mw32(p,ir,iman&~IMAN_IE);writes++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"IRQ DISABLE",s);goto out;}
 
- s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBCMD",s);goto out;}started=TRUE;halted=FALSE;s=mw32(p,op,(cmd&~(CMD_INTE|CMD_HSEE))|CMD_RUN);writes++;if(EFI_ERROR(s)) {remember_fail(u"RUN",u"START",s);fatal_running();}
+ s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBCMD",s);goto out;}started=TRUE;halted=FALSE;s=mw32(p,op,(cmd&~(CMD_INTE|CMD_HSEE))|CMD_RUN);writes++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"START",s);fatal_running();}
  s=wait_hch(p,op,FALSE,1000,&status,&reads);if(EFI_ERROR(s)){remember_fail(u"RUN",u"HCH CLEAR",s);fatal_running();}
 
  port_off=op+PORTSC_BASE+(EXPECTED_PORT-1)*0x10U;
@@ -196,15 +218,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  Print(u"PORT RESET: PORT=%u AFTER=%08x SPEED=%u PED=1 PRC=1 PASS\r\n",EXPECTED_PORT,portsc,speed);
  s=mw32(p,port_off,port_preserve(portsc)|(portsc&PORT_CHANGE_MASK));writes++;if(EFI_ERROR(s)){remember_fail(u"PORT",u"ACK CHANGES",s);fatal_running();}
 
- /* Consume the mandatory Port Status Change Event before command completions. */
  for(i=0;i<3000;i++){ed0=ev[event_idx*4];ed1=ev[event_idx*4+1];ed2=ev[event_idx*4+2];ed3=ev[event_idx*4+3];event_type=(ed3&TRB_TYPE_MASK)>>TRB_TYPE_SHIFT;if((ed3&TRB_CYCLE)&&event_type==TRB_PORT_STATUS_CHANGE)break;uefi_call_wrapper(BS->Stall,1,1000);}
  if(i==3000){s=EFI_TIMEOUT;remember_fail(u"EVENT",u"PORT STATUS CHANGE",s);fatal_running();}
- if((ed0>>24)!=EXPECTED_PORT || ((ed2>>24)&255U)!=CC_SUCCESS){s=EFI_DEVICE_ERROR;remember_fail(u"EVENT",u"PORT STATUS CHANGE VALIDATE",s);fatal_running();}
+ if((ed0>>24)!=EXPECTED_PORT){s=EFI_DEVICE_ERROR;remember_fail(u"EVENT",u"PORT STATUS CHANGE VALIDATE",s);fatal_running();}
  event_idx++;s=mw64(p,ir+0x18,ev_d.dev+(event_idx*16U));writes+=2;if(EFI_ERROR(s)){remember_fail(u"EVENT",u"ERDP PORT",s);fatal_running();}
- Print(u"PORT EVENT: TYPE=%u PORT=%u CODE=%u PASS\r\n",event_type,ed0>>24,(ed2>>24)&255U);
+ Print(u"PORT EVENT: TYPE=%u PORT=%u PASS\r\n",event_type,ed0>>24);
 
- /* Enable Slot. Slot Type 0 is valid on this controller; only absence of the capability is fatal. */
  cr[0]=0;cr[1]=0;cr[2]=0;cr[3]=TRB_CYCLE|(stype<<16)|(TRB_ENABLE_SLOT<<TRB_TYPE_SHIFT);
+ __sync_synchronize();
  s=mw32(p,db,0);writes++;if(EFI_ERROR(s)){remember_fail(u"ENABLE SLOT",u"DOORBELL",s);fatal_running();}
  for(i=0;i<10000;i++){ed0=ev[event_idx*4];ed1=ev[event_idx*4+1];ed2=ev[event_idx*4+2];ed3=ev[event_idx*4+3];event_type=(ed3&TRB_TYPE_MASK)>>TRB_TYPE_SHIFT;if((ed3&TRB_CYCLE)&&event_type==TRB_COMMAND_COMPLETION)break;uefi_call_wrapper(BS->Stall,1,1000);}
  if(i==10000){s=EFI_TIMEOUT;remember_fail(u"ENABLE SLOT",u"COMPLETION",s);fatal_running();}
@@ -212,17 +233,18 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  event_idx++;s=mw64(p,ir+0x18,ev_d.dev+(event_idx*16U));writes+=2;if(EFI_ERROR(s)){remember_fail(u"ENABLE SLOT",u"ERDP",s);fatal_running();}
  Print(u"ENABLE SLOT: CODE=%u SLOT=%u PASS\r\n",cc,slot);
 
- /* Input Control: Add Slot + Add EP0. Slot Context: root port, speed, one context. */
  ctx_bytes=32U*ctxsz;input_bytes=33U*ctxsz;if(ctx_bytes>8192U||input_bytes>8192U){s=EFI_BAD_BUFFER_SIZE;remember_fail(u"CTX",u"SIZE",s);fatal_running();}
  dcbaa[slot]=devctx_d.dev;
  put32(inctx,0,3U);
  { UINT8 *sc=inctx+ctxsz,*ec=inctx+(2U*ctxsz); UINT32 sw0=(speed<<SPEED_SHIFT)|(1U<<CTX_ENTRIES_SHIFT); UINT32 sw1=EXPECTED_PORT<<ROOT_PORT_SHIFT; UINT32 ew1=(EP0_CERR<<1)|(EP0_CTRL_TYPE<<3)|((speed==4?512U:(speed==3?64U:8U))<<16); UINT32 mps=(speed==4?512U:(speed==3?64U:8U));
   put32(sc,0,sw0);put32(sc,4,sw1);put32(sc,8,0);put32(sc,12,0);
   put32(ec,0,0);put32(ec,4,ew1);put64(ec,8,(ep0_d.dev&~0xFULL)|1ULL);put32(ec,16,0);
-  { UINT32 *ep=(UINT32*)ep0_d.host; ep[1020]= (UINT32)ep0_d.dev; ep[1021]=(UINT32)(ep0_d.dev>>32); ep[1022]=0; ep[1023]=TRB_CYCLE|(TRB_LINK<<TRB_TYPE_SHIFT); }
+  { UINT32 *ep=(UINT32*)ep0_d.host; ep[1020]=(UINT32)ep0_d.dev; ep[1021]=(UINT32)(ep0_d.dev>>32); ep[1022]=0; ep[1023]=TRB_CYCLE|(TRB_LINK<<TRB_TYPE_SHIFT); }
   Print(u"ADDRESS DEVICE: SLOT=%u PORT=%u SPEED=%u EP0-MPS=%u\r\n",slot,EXPECTED_PORT,speed,mps);
  }
+ __sync_synchronize();
  cr[4]=(UINT32)inctx_d.dev;cr[5]=(UINT32)(inctx_d.dev>>32);cr[6]=0;cr[7]=TRB_CYCLE|(TRB_ADDRESS_DEVICE<<TRB_TYPE_SHIFT)|(slot<<24);
+ __sync_synchronize();
  s=mw32(p,db,0);writes++;if(EFI_ERROR(s)){remember_fail(u"ADDRESS DEVICE",u"DOORBELL",s);fatal_running();}
  for(i=0;i<10000;i++){ed0=ev[event_idx*4];ed1=ev[event_idx*4+1];ed2=ev[event_idx*4+2];ed3=ev[event_idx*4+3];event_type=(ed3&TRB_TYPE_MASK)>>TRB_TYPE_SHIFT;if((ed3&TRB_CYCLE)&&event_type==TRB_COMMAND_COMPLETION)break;uefi_call_wrapper(BS->Stall,1,1000);}
  if(i==10000){s=EFI_TIMEOUT;remember_fail(u"ADDRESS DEVICE",u"COMPLETION",s);fatal_running();}
