@@ -53,3 +53,15 @@ The xHCI bridge must not depend on a particular machine's IOMMU/VT-d configurati
 ## D013 — Poll command completions before enabling CPU interrupts
 
 The first command-ring test uses exactly one Enable Slot command and polls the primary event ring rather than enabling CPU interrupt delivery. This isolates command-ring, doorbell, event-ring cycle-state, completion-event parsing, and ERDP acknowledgement from MSI/MSI-X/interrupt-handler behavior. CPU interrupts remain disabled until command/event correctness is established.
+
+## D014 — Gate 6 starts with one known pre-connected wired keyboard
+
+Gate 6 uses one wired keyboard connected before boot and the V28 UEFI discovery snapshot to identify the expected root port/interface/endpoint facts. The xHCI bridge must still perform the normal port-state/reset, Enable Slot, Address Device, descriptor/configuration, and HID boot-protocol sequence; UEFI discovery facts are hints and validation inputs, not authority to skip controller/device setup. Mouse traffic remains out of scope until keyboard bring-up is stable.
+
+## D015 — Keep Gate 6 command scope incremental
+
+Gate 6 must not combine keyboard bring-up with general USB functionality. The implementation advances through small observable stages: identify the expected root port, reset it, enable one slot, build/address the device context, retrieve only the descriptors needed to identify/configure the keyboard, select the HID boot interface, set configuration/protocol, and stop before continuous report polling unless the preceding stage has passed. Each command completion is validated before the next command is issued.
+
+## D016 — No CPU interrupts during initial Gate 6 bring-up
+
+The first Gate 6 implementation continues the V31 polling model. Command and transfer completion events are consumed by polling the event ring with CPU interrupt delivery disabled. Interrupt routing and MSI/MSI-X are deferred until the command/transfer path is proven on the Toshiba.
