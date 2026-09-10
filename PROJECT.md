@@ -43,3 +43,8 @@ Every xHCI test that changes controller state or implements xHCI data structures
 
 ### Minimal-driver scope rule
 The Linux/coreboot cross-check is for correctness and edge-case discovery only. It must not expand the project's scope. This project remains a deliberately minimal xHCI/USB HID implementation: adopt only the hardware behavior and safeguards required by our stated design, and do not import unrelated Linux/coreboot features, abstractions, device classes, power-management support, quirks, or general USB functionality merely because those implementations contain them.
+
+### Mandatory pre-build implementation review loop
+Before committing any new or revised xHCI test artifact, perform an implementation review before attempting a build. The review must cross-check the relevant implementation against the xHCI specification, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI where applicable. It must check register semantics and ordering, alignment/page-size requirements, DMA mapping and address-width handling, xHCI data-structure layout, allocation/free symmetry, failure-path cleanup, error propagation, and hardware-specific assumptions. Only after the implementation review passes should the change be committed and built. CI is then a build/API/linkage verification step, not the primary implementation-correctness review. A successful build does not imply that the implementation is correct. After CI succeeds, perform a post-build sanity review before hardware testing.
+
+The normal development loop is therefore: **design review → implementation review → commit → build/CI → post-build review → hardware test only when all applicable gates pass.**
