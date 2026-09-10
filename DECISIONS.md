@@ -30,12 +30,11 @@ Coreboot/libpayload xHCI code may be reused or adapted as a source, but the targ
 
 ## D008 — Consolidate V20–V27 into a self-contained xhci_bridge_init()
 
-The existing V03–V27 experiments prove individual register transitions but do not accumulate: each EFI binary starts in a fresh firmware-owned controller state. Rather than adding another isolated diagnostic branch, the next work consolidates halt → reset → CNR clear → DMA allocation → DCBAA/command/event rings → readback → safe teardown into one reusable `xhci_bridge_init()` with a portable platform operations layer.
+The existing V03–V27 experiments prove individual register transitions but do not accumulate: each EFI binary starts in a fresh firmware-owned controller state. Rather than adding another isolated diagnostic branch, the next work consolidates halt → reset → DMA allocation → DCBAA/command/event rings → readback → safe teardown into one reusable `xhci_bridge_init()` with a portable platform operations layer.
 
 ## D009 — Start with empty device hints
 
 The first `xhci_bridge_init()` test runs with zero device hints — full controller initialization, DMA allocation, ring setup, and safe teardown only. Keyboard and mouse hints are added only after clean initialization is repeatable.
-
 
 ## D010 — Support xHCI 1.0 and later only
 
@@ -43,7 +42,10 @@ The project has a hard compatibility boundary at xHCI 1.0. A controller is suppo
 
 This boundary removes the legacy 0.96 compatibility path from the project while retaining capability discovery for optional features and later xHCI revisions. The xHCI specification is the normative baseline; Linux, coreboot/libpayload, and EDK2 are implementation cross-references only.
 
-
 ## D011 — UEFI is the authoritative keyboard/mouse discovery provider
 
 The service shall consume the maximum useful keyboard/mouse discovery information supplied by UEFI and shall not receive a general USB-device inventory. Only boot-protocol HID keyboard and mouse interfaces enter the handoff. The handoff is a versioned discovery snapshot, not a transfer of ownership of UEFI-created xHCI rings, contexts, DMA buffers, slot IDs, or live controller state.
+
+## D012 — UEFI is the portable DMA abstraction boundary
+
+The xHCI bridge must not depend on a particular machine's IOMMU/VT-d configuration. Platform-specific DMA addressing/remapping is delegated to `EFI_PCI_IO_PROTOCOL`: controller-referenced memory is allocated with `AllocateBuffer()`, mapped with `EfiPciIoOperationBusMasterCommonBuffer`, and programmed into xHCI using only the returned device-visible addresses. Mappings remain live while xHCI may DMA and are released only after controller references are cleared. IOMMU/VT-d state may be recorded for diagnosis, but it is not a normal portability prerequisite.
