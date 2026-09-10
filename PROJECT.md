@@ -36,3 +36,7 @@ Before any Run/Stop or DMA, investigate the Toshiba's IOMMU/VT-d state and UEFI 
 - `DECISIONS.md`: design decisions log.
 - `EXPERIMENTS.md`: chronological evidence log for hardware experiments.
 - `TODO.md`: gated task list with acceptance criteria.
+
+
+### Mandatory xHCI implementation cross-check
+Every xHCI test that changes controller state or implements xHCI data structures must be reviewed against both the applicable xHCI specification and the coreboot/libpayload xHCI implementation. Coreboot is a practical implementation cross-check, not a substitute for the normative specification. Reviews must explicitly check controller reset/initialization sequencing, capability/register interpretation, PAGESIZE, DMA addressing, DCBAA, scratchpad buffers, command/event rings, and controller ownership assumptions where relevant.
