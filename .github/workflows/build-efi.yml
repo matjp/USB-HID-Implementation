@@ -145,7 +145,7 @@ jobs:
       - name: Compile
         run: |
           set -euxo pipefail
-          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" -fpic -ffreestanding -fno-stack-protector -fno-stack-check -fshort-wchar -mno-red-zone -maccumulate-outgoing-args -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os -c "build/$TEST_ID/$TEST_ID.c" -o "build/$TEST_ID/test.o"
+          gcc -I"$GITHUB_WORKSPACE/efi" -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" -fpic -ffreestanding -fno-stack-protector -fno-stack-check -fshort-wchar -mno-red-zone -maccumulate-outgoing-args -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os -c "build/$TEST_ID/$TEST_ID.c" -o "build/$TEST_ID/test.o"
 
       - name: Record patched source hash
         run: |
