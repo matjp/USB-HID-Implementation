@@ -499,6 +499,8 @@ fatal:
         Print(u"FAIL STATUS=%r\r\n", s);
     else
         Print(u"PASS / 5 SEC...\r\n");
+#ifndef XHCI_V32_NO_FINAL_DELAY
     uefi_call_wrapper(BS->Stall, 1, 5000000);
+#endif
     return s;
 }
