@@ -116,7 +116,7 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 - On every error path, DMA mappings remain live until controller references are safely eliminated.
 - The controller can be halted/reset and all controller pointers cleared before DMA release.
 
-**Gate 6 status: DESIGN REVIEW COMPLETE; cumulative V32 implementation review, build/provenance, post-build review, and hardware test remain pending.**
+**Gate 6 status: RESTARTED. All prior V32.x Gate 6 source files have been removed. A new cumulative V32 implementation is under review against the Intel xHCI specification, Linux xhci-hcd, coreboot/libpayload, and UEFI/GNU-EFI; CI and hardware testing remain pending.**
 
 ## Gate 7 — Keyboard reports, then mouse
 
