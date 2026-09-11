@@ -38,7 +38,6 @@
 #define PORT_PR (1U << 4)
 #define PORT_SPEED_MASK (0xFU << 10)
 #define PORT_PRC (1U << 21)
-#define PORT_CHANGE_MASK (0x7FU << 17)
 #define PORT_RO ((1U << 0) | (1U << 3) | (0xFU << 10) | (1U << 30))
 #define PORT_RWS ((0xFU << 5) | (1U << 9) | (3U << 14) | (7U << 25))
 #define PORT_RW (1U << 16)
@@ -427,60 +426,12 @@ static void init_ep0_ring(struct dma_obj *d)
                                  TRB_LINK_TOGGLE | TRB_CYCLE;
 }
 
-static EFI_STATUS ring_command(EFI_PCI_IO_PROTOCOL *p, UINT32 db, UINT32 op,
-                               struct dma_obj *cr, UINTN index, UINT32 slot,
-                               UINT32 type, UINT64 ptr, UINT32 *status,
-                               UINT32 *event_type, UINT64 *event_cmd_ptr,
-                               UINT32 *event_slot, UINT32 *event_dw2,
-                               struct dma_obj *ev, UINTN *ev_index,
-                               UINT8 *ev_cycle)
-{
-    UINT32 *r = (UINT32 *)cr->host;
-    UINT32 *er = (UINT32 *)ev->host;
-    UINTN i;
-    UINT32 d3;
-    UINT64 event_addr;
-
-    r[index * 4 + 0] = (UINT32)ptr;
-    r[index * 4 + 1] = (UINT32)(ptr >> 32);
-    r[index * 4 + 2] = 0;
-    r[index * 4 + 3] = (type << TRB_TYPE_SHIFT) |
-                        (slot << TRB_SLOT_SHIFT) | TRB_CYCLE;
-    __sync_synchronize();
-
-    if (EFI_ERROR(mw32(p, db, 0))) return EFI_DEVICE_ERROR;
-    if (EFI_ERROR(mr32(p, db, status))) return EFI_DEVICE_ERROR;
-
-    for (i = 0; i < 10000; ++i) {
-        d3 = er[*ev_index * 4 + 3];
-        if ((d3 & TRB_CYCLE) == *ev_cycle) {
-            *event_type = (d3 >> TRB_TYPE_SHIFT) & 0x3fU;
-            *event_slot = (d3 >> TRB_SLOT_SHIFT) & 0xffU;
-            *event_cmd_ptr = trb_get64(ev->host, *ev_index);
-            *event_dw2 = er[*ev_index * 4 + 2];
-            event_addr = ev->dev + (*ev_index * 16U);
-
-            clear_trb(ev->host, *ev_index);
-            __sync_synchronize();
-
-            /* ERDP identifies the last event software has consumed. */
-            if (EFI_ERROR(mw64(p, 0, 0))) {
-                /* This call is intentionally never used: runtime offset is supplied below. */
-                return EFI_DEVICE_ERROR;
-            }
-            return EFI_SUCCESS;
-        }
-        uefi_call_wrapper(BS->Stall, 1, 1000);
-    }
-    return EFI_TIMEOUT;
-}
-
-/* Poll one event from the primary interrupter and advance ERDP to the event
- * just consumed. This helper deliberately takes the runtime ERDP offset. */
+/* Poll one event from the primary interrupter. The command TRB pointer is
+ * captured from the consumed event before the event-ring index advances. */
 static EFI_STATUS poll_event(EFI_PCI_IO_PROTOCOL *p, UINT32 erdp_off,
                              struct dma_obj *ev, UINTN *idx, UINT8 *cycle,
                              UINT32 *type, UINT32 *dw0, UINT32 *dw2,
-                             UINT32 *dw3)
+                             UINT32 *dw3, UINT64 *event_cmd_ptr)
 {
     UINT32 *r = (UINT32 *)ev->host;
     UINTN i;
@@ -496,6 +447,7 @@ static EFI_STATUS poll_event(EFI_PCI_IO_PROTOCOL *p, UINT32 erdp_off,
             *dw2 = r[consumed * 4 + 2];
             *dw3 = d3;
             *type = (d3 >> TRB_TYPE_SHIFT) & 0x3fU;
+            *event_cmd_ptr = trb_get64(ev->host, consumed);
             processed_addr = ev->dev + consumed * 16U;
 
             clear_trb(ev->host, consumed);
@@ -515,7 +467,9 @@ static EFI_STATUS poll_event(EFI_PCI_IO_PROTOCOL *p, UINT32 erdp_off,
     return EFI_TIMEOUT;
 }
 
-static UINT32 port_write_preserve(UINT32 x)
+/* PORTSC fields are grouped by xHCI access type. Preserve RO fields and
+ * ordinary RW fields; do not replay RW1C/RW1S change bits. */
+static UINT32 port_write_base(UINT32 x)
 {
     return (x & PORT_RO) | (x & PORT_RWS) | (x & PORT_RW);
 }
@@ -525,7 +479,7 @@ static UINT32 ep0_mps(UINT32 speed)
     switch (speed) {
     case 1: /* full speed */
     case 2: /* low speed */
-        return speed == 2 ? 8U : 8U;
+        return 8U;
     case 3: /* high speed */
         return 64U;
     case 4: /* super speed */
@@ -548,7 +502,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 {
     EFI_HANDLE *hs = NULL;
     EFI_PCI_IO_PROTOCOL *p = NULL;
-    EFI_STATUS s = EFI_SUCCESS, ts;
+    EFI_STATUS s = EFI_SUCCESS;
     UINTN n = 0, i;
     UINT32 id = 0, cls = 0, bar0 = 0, bar1 = 0;
     UINT32 cap = 0, hcs1 = 0, hcs2 = 0, hcc = 0;
@@ -562,7 +516,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     UINTN ctx_size = 32, ctx_pages = 1, input_pages = 1;
     UINTN cmd_index = 0, ev_index = 0;
     UINT8 ev_cycle = 1;
-    BOOLEAN halted = FALSE, started = FALSE, slot_enabled = FALSE;
+    BOOLEAN halted = FALSE, started = FALSE;
 
     struct discovery d = {0};
     struct dma_obj dcbaa_d = {0}, spa_d = {0}, cr_d = {0}, ev_d = {0};
@@ -672,7 +626,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     scratch_pages = 1;
 
     if (hcc & HCC_CTXSZ) ctx_size = 64;
-    ctx_pages = (ctx_size == 64) ? 1 : 1;
+    ctx_pages = 1;
     input_pages = 1;
 
     Print(u"xHCI VERSION=%u.%02u PCI=%04x:%04x BAR=%08x/%08x OPBASE=%02x\r\n",
@@ -756,7 +710,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     ep0 = (UINT32 *)ep0_d.host;
 
     if (scratchpads) {
-        spa[0] = scratch[0].dev;
         for (i = 0; i < scratchpads; ++i)
             spa[i] = scratch[i].dev;
         dcbaa[0] = spa_d.dev;
@@ -834,11 +787,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         fatal_running();
     }
 
-    /* Reset the discovered root port. Only PR is newly asserted; change bits
-     * are not blindly replayed. */
+    /* Reset the discovered root port. PR is the only newly asserted control
+     * bit; RW1C/RW1S change bits from the read value are not replayed. */
     {
         UINT32 poff = op + PORTSC_BASE + (d.port - 1U) * 0x10U;
-        UINT32 w = port_write_preserve(portsc) | PORT_PR;
+        UINT32 w = port_write_base(portsc) | PORT_PR;
         s = mw32(p, poff, w);
         if (EFI_ERROR(s)) {
             remember_fail(u"PORT", u"PORT RESET", s);
@@ -849,7 +802,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     /* xHCI requires the reset-completion Port Status Change Event. */
     for (;;) {
         s = poll_event(p, ir + 0x18, &ev_d, &ev_index, &ev_cycle,
-                       &event_type, &event_dw0, &event_dw2, &event_dw3);
+                       &event_type, &event_dw0, &event_dw2, &event_dw3,
+                       &event_ptr);
         if (EFI_ERROR(s)) {
             remember_fail(u"PORT", u"RESET EVENT", s);
             fatal_running();
@@ -879,9 +833,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             fatal_running();
         }
 
-        /* PRC is write-1-to-clear; preserve ordinary RW fields and write no
-         * unrelated change bits. */
-        s = mw32(p, poff, port_write_preserve(portsc) | PORT_PRC);
+        /* PRC is RW1C. Clear only PRC; all other bits are written as zero so
+         * no unrelated change notification is acknowledged accidentally. */
+        s = mw32(p, poff, PORT_PRC);
         if (EFI_ERROR(s)) {
             remember_fail(u"PORT", u"CLEAR PRC", s);
             fatal_running();
@@ -907,7 +861,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
         for (;;) {
             s = poll_event(p, ir + 0x18, &ev_d, &ev_index, &ev_cycle,
-                           &event_type, &event_dw0, &event_dw2, &event_dw3);
+                           &event_type, &event_dw0, &event_dw2, &event_dw3,
+                           &event_ptr);
             if (EFI_ERROR(s)) { remember_fail(u"ENABLE SLOT", u"EVENT", s); fatal_running(); }
             if (event_type != TRB_COMMAND_COMPLETION) continue;
             if (((event_dw2 >> 24) & 0xffU) != CC_SUCCESS) {
@@ -923,11 +878,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             }
             break;
         }
-        slot_enabled = TRUE;
         Print(u"ENABLE SLOT: SLOT=%u TYPE=%u PASS\r\n", slot, slot_type);
     }
 
-    /* Address Device input context.  Context size is selected explicitly from
+    /* Address Device input context. Context size is selected explicitly from
      * HCCPARAMS1; offsets therefore work for both 32-byte and 64-byte contexts. */
     dcbaa[slot] = devctx_d.dev;
     __sync_synchronize();
@@ -994,16 +948,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
         for (;;) {
             s = poll_event(p, ir + 0x18, &ev_d, &ev_index, &ev_cycle,
-                           &event_type, &event_dw0, &event_dw2, &event_dw3);
+                           &event_type, &event_dw0, &event_dw2, &event_dw3,
+                           &event_ptr);
             if (EFI_ERROR(s)) { remember_fail(u"ADDRESS DEVICE", u"EVENT", s); fatal_running(); }
             if (event_type != TRB_COMMAND_COMPLETION) continue;
 
-            event_ptr = ((UINT64)event_dw0);
-            /* Command TRB pointer is the low/high 64-bit field at DW0/DW1. */
-            event_ptr |= ((UINT64)((UINT32 *)ev_d.host)[ev_index * 4 + 1] << 32);
             if (event_ptr != cmd_addr) {
-                /* The event was consumed; an unrelated command completion is
-                 * not acceptable for this gate. */
                 s = EFI_DEVICE_ERROR;
                 remember_fail(u"ADDRESS DEVICE", u"COMMAND POINTER", s);
                 fatal_running();
@@ -1037,11 +987,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         ++cmd_index;
         for (;;) {
             s = poll_event(p, ir + 0x18, &ev_d, &ev_index, &ev_cycle,
-                           &event_type, &event_dw0, &event_dw2, &event_dw3);
+                           &event_type, &event_dw0, &event_dw2, &event_dw3,
+                           &event_ptr);
             if (EFI_ERROR(s)) { remember_fail(u"DISABLE SLOT", u"EVENT", s); fatal_running(); }
             if (event_type != TRB_COMMAND_COMPLETION) continue;
             if (((event_dw2 >> 24) & 0xffU) != CC_SUCCESS ||
-                event_dw0 != (UINT32)cmd_addr ||
+                event_ptr != cmd_addr ||
                 ((event_dw3 >> TRB_SLOT_SHIFT) & 0xffU) != slot) {
                 s = EFI_DEVICE_ERROR;
                 remember_fail(u"DISABLE SLOT", u"COMPLETION", s);
@@ -1049,7 +1000,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             }
             break;
         }
-        slot_enabled = FALSE;
     }
 
     /* Halt and verify before any DMA release. */
@@ -1084,8 +1034,6 @@ out:
 
     /* On the normal path the controller has been positively halted and reset. */
     if (halted) {
-        UINT32 zero = 0;
-        (void)zero;
         if (p) {
             (void)mw64(p, op + 0x30, 0);
             (void)mw64(p, op + 0x18, 0);
