@@ -1,0 +1,50 @@
+name: Generate V32.2
+on:
+  push:
+    paths:
+      - .github/workflows/generate-v32.2.yml
+permissions:
+  contents: write
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('efi/xhci_mmio_v32.1.c').read_text()
+          src = src.replace('TOSHIBA xHCI V32 /', 'TOSHIBA xHCI V32.2 /', 1)
+          old = '''    /* Verify the programmed CRCR value while the command ring is stopped. */
+    {
+        UINT64 v;
+        s = mr64(p, op + 0x18, &v);
+        if (EFI_ERROR(s) || (v & ~0x3fULL) != cr_d.dev) {
+            s = EFI_DEVICE_ERROR;
+            remember_fail(u"INIT", u"CRCR READBACK", s);
+            goto out;
+        }
+    }
+'''
+          if old not in src:
+              raise SystemExit('CRCR readback block not found')
+          src = src.replace(old, '''    /* CRCR pointer bits are write-only; a read returns zero by specification.
+     * Do not use CRCR readback as a pointer-programming test. */
+    s = mr32(p, op + 4, &status);
+    if (EFI_ERROR(s) || !(status & STS_HCH) || (status & STS_CNR)) {
+        s = EFI_ERROR(s) ? s : EFI_DEVICE_ERROR;
+        remember_fail(u"INIT", u"POST-CRCR STATE", s);
+        goto out;
+    }
+''', 1)
+          Path('efi/xhci_mmio_v32.2.c').write_text(src)
+          PY
+      - name: Commit source and remove generator
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm .github/workflows/generate-v32.2.yml
+          git add efi/xhci_mmio_v32.2.c .github/workflows/generate-v32.2.yml
+          git commit -m 'Build V32.2: remove invalid CRCR readback test'
+          git push
