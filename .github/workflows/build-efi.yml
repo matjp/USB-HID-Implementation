@@ -87,60 +87,13 @@ jobs:
           git ls-files --error-unmatch -- "$SOURCE" >/dev/null 2>&1 || { echo "ERROR: source not tracked: $SOURCE" >&2; exit 1; }
           EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"
           test -n "$EFI_COMMIT"
-          V32_3_COMMIT="$(git log -1 --format=%H -- efi/xhci_mmio_v32.3.c)"
-          test -n "$V32_3_COMMIT"
-          printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nV32_3_DEPENDENCY_COMMIT=%s\nV32_3_DEPENDENCY_PATH=efi/xhci_mmio_v32.3.c\nTEST_ID=%s\n' "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$V32_3_COMMIT" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
+          printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
           cat "build/$TEST_ID/BUILD-PROVENANCE.txt"
-
-      - name: Prepare V32.3 runtime-offset source
-        run: |
-          set -euxo pipefail
-          cp efi/xhci_mmio_v32.3.c "build/$TEST_ID/xhci_mmio_v32.3_patched.c"
-          python3 - "build/$TEST_ID/xhci_mmio_v32.3_patched.c" <<'PY'
-          import pathlib
-          import sys
-
-          path = pathlib.Path(sys.argv[1])
-          text = path.read_text()
-
-          old = """    UINT32 status = 0, maxslots = 0, pagesize = 0;\n"""
-          new = """    UINT32 status = 0, maxslots = 0, pagesize = 0;\n    UINT32 rtsoff = 0, xhci_rt = 0;\n"""
-          if text.count(old) != 1:
-              raise SystemExit("unexpected status declaration count")
-          text = text.replace(old, new)
-
-          old = """    s = mr32(p, 0x10, &hcc);\n    if (EFI_ERROR(s) || !(hcc & HCC_AC64)) { s = EFI_UNSUPPORTED; goto out; }\n"""
-          new = """    s = mr32(p, 0x10, &hcc);\n    if (EFI_ERROR(s) || !(hcc & HCC_AC64)) { s = EFI_UNSUPPORTED; goto out; }\n    s = mr32(p, 0x18, &rtsoff);\n    if (EFI_ERROR(s)) goto out;\n    xhci_rt = rtsoff & ~0x1fU;\n"""
-          if text.count(old) != 1:
-              raise SystemExit("unexpected HCC block count")
-          text = text.replace(old, new)
-
-          old = """    Print(u\"xHCI VERSION=%u.%02u PCI=%04x:%04x BAR=%08x/%08x OPBASE=%02x\\r\\n\",\n          ver >> 8, ver & 0xffU, id & 0xffffU, id >> 16, bar0, bar1, op);\n"""
-          new = """    Print(u\"xHCI VERSION=%u.%02u PCI=%04x:%04x BAR=%08x/%08x OPBASE=%02x RTSOFF=%08x\\r\\n\",\n          ver >> 8, ver & 0xffU, id & 0xffffU, id >> 16, bar0, bar1, op, rtsoff);\n"""
-          if text.count(old) != 1:
-              raise SystemExit("unexpected controller info print count")
-          text = text.replace(old, new)
-
-          replacements = {
-              "mw32(p, 0x20 + 0x08, 1U)": "mw32(p, xhci_rt + 0x08, 1U)",
-              "mw64(p, 0x20 + 0x18, ev_d.dev | 8ULL)": "mw64(p, xhci_rt + 0x18, ev_d.dev | 8ULL)",
-              "mw64(p, 0x20 + 0x10, erst_d.dev)": "mw64(p, xhci_rt + 0x10, erst_d.dev)",
-          }
-          for old, new in replacements.items():
-              if text.count(old) != 1:
-                  raise SystemExit(f"unexpected runtime access count: {old}")
-              text = text.replace(old, new)
-
-          path.write_text(text)
-          PY
-          grep -F 'xhci_rt + 0x08' "build/$TEST_ID/xhci_mmio_v32.3_patched.c"
-          grep -F 'xhci_rt + 0x18' "build/$TEST_ID/xhci_mmio_v32.3_patched.c"
-          grep -F 'xhci_rt + 0x10' "build/$TEST_ID/xhci_mmio_v32.3_patched.c"
 
       - name: Compile
         run: |
           set -euxo pipefail
-          gcc -I"$GITHUB_WORKSPACE/build/$TEST_ID" -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" -fpic -ffreestanding -fno-stack-protector -fno-stack-check -fshort-wchar -mno-red-zone -maccumulate-outgoing-args -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os -c "$SOURCE" -o "build/$TEST_ID/test.o"
+          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" -fpic -ffreestanding -fno-stack-protector -fno-stack-check -fshort-wchar -mno-red-zone -maccumulate-outgoing-args -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os -c "$SOURCE" -o "build/$TEST_ID/test.o"
 
       - name: Link
         run: |
