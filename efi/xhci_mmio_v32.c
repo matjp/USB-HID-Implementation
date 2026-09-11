@@ -353,7 +353,6 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         EFI_USB_IO_PROTOCOL *usb = NULL;
         EFI_USB_INTERFACE_DESCRIPTOR in;
         EFI_USB_DEVICE_DESCRIPTOR dd;
-        EFI_USB_CONFIG_DESCRIPTOR cd;
         EFI_USB_ENDPOINT_DESCRIPTOR ep;
         EFI_DEVICE_PATH_PROTOCOL *path;
         UINTN j, usb_nodes = 0;
@@ -365,7 +364,6 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         if (in.InterfaceClass != USB_CLASS_HID || in.InterfaceSubClass != HID_SUBCLASS_BOOT ||
             in.InterfaceProtocol != HID_PROTOCOL_KEYBOARD) continue;
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 2, usb, &dd))) continue;
-        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 2, usb, &cd))) continue;
         path = DevicePathFromHandle(hs[i]);
         port = root_port(path, &usb_nodes);
         if (!port || usb_nodes != 1U || !path_last_pci_bdf(path, &pci_dev, &pci_fun)) continue;
@@ -375,7 +373,7 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         d->interface_number = in.InterfaceNumber;
         d->vid = dd.IdVendor;
         d->pid = dd.IdProduct;
-        d->config = cd.ConfigurationValue;
+        d->config = 0;
         d->endpoint = 0;
         d->mps = 0;
         d->interval = 0;
