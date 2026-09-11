@@ -997,5 +997,8 @@ out:
         Print(u"CPU-INTERRUPTS=0 USB-TRANSFERS=0 MOUSE=0 HUBS=0\r\n");
         Print(u"CONTROLLER HALTED / RESET / POINTERS CLEARED BEFORE DMA RELEASE\r\n");
     }
+
+    Print(u"\r\nPRESS ANY KEY TO EXIT...\r\n");
+    uefi_call_wrapper(BS->WaitForEvent, 3, 1, &ST->ConIn->WaitForKey, NULL);
     return s;
 }
