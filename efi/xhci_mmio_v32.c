@@ -166,8 +166,8 @@ static EFI_STATUS dma_alloc(EFI_PCI_IO_PROTOCOL *p, UINTN pages,
 
     if (!pages || pages > ((UINTN)-1) / EFI_PAGE_BYTES)
         return EFI_BAD_BUFFER_SIZE;
-
     bytes = pages * EFI_PAGE_BYTES;
+
     s = uefi_call_wrapper(p->AllocateBuffer, 6, p, AllocateAnyPages,
                           EfiBootServicesData, pages, &d->host, 0);
     if (EFI_ERROR(s)) return s;
@@ -210,7 +210,6 @@ static EFI_STATUS dma_alloc(EFI_PCI_IO_PROTOCOL *p, UINTN pages,
 static EFI_STATUS dma_free(EFI_PCI_IO_PROTOCOL *p, struct dma_obj *d)
 {
     EFI_STATUS s = EFI_SUCCESS, t;
-
     if (!d->live) return EFI_SUCCESS;
     if (d->map) {
         t = uefi_call_wrapper(p->Unmap, 2, p, d->map);
@@ -233,7 +232,6 @@ static EFI_STATUS wait_hch(EFI_PCI_IO_PROTOCOL *p, UINT32 op, BOOLEAN halted,
     UINTN i;
     EFI_STATUS s;
     UINT32 want = halted ? STS_HCH : 0;
-
     for (i = 0; i < loops; ++i) {
         s = mr32(p, op + 4, st);
         if (EFI_ERROR(s)) return s;
@@ -248,14 +246,12 @@ static EFI_STATUS reset_xhci(EFI_PCI_IO_PROTOCOL *p, UINT32 op,
 {
     EFI_STATUS s;
     UINTN i;
-
     s = mr32(p, op, cmd);
     if (EFI_ERROR(s)) return s;
     *cmd &= ~(CMD_RUN | CMD_INTE | CMD_HSEE);
     *cmd |= CMD_RESET;
     s = mw32(p, op, *cmd);
     if (EFI_ERROR(s)) return s;
-
     for (i = 0; i < 1000; ++i) {
         s = mr32(p, op, cmd);
         if (EFI_ERROR(s)) return s;
@@ -263,7 +259,6 @@ static EFI_STATUS reset_xhci(EFI_PCI_IO_PROTOCOL *p, UINT32 op,
         uefi_call_wrapper(BS->Stall, 1, 1000);
     }
     if (*cmd & CMD_RESET) return EFI_TIMEOUT;
-
     for (i = 0; i < 10000; ++i) {
         s = mr32(p, op + 4, st);
         if (EFI_ERROR(s)) return s;
@@ -278,7 +273,6 @@ static BOOLEAN path_last_pci_bdf(EFI_DEVICE_PATH_PROTOCOL *path,
 {
     UINT8 *p = (UINT8 *)path;
     BOOLEAN found = FALSE;
-
     while (p) {
         UINT16 len = (UINT16)p[2] | ((UINT16)p[3] << 8);
         if (len < 4 || len > 0xff) break;
@@ -299,7 +293,6 @@ static UINT8 root_port(EFI_DEVICE_PATH_PROTOCOL *path, UINTN *usb_nodes)
     UINT8 *p = (UINT8 *)path;
     UINT8 port = 0;
     *usb_nodes = 0;
-
     while (p) {
         UINT16 len = (UINT16)p[2] | ((UINT16)p[3] << 8);
         if (len < 4 || len > 0xff) break;
@@ -313,15 +306,48 @@ static UINT8 root_port(EFI_DEVICE_PATH_PROTOCOL *path, UINTN *usb_nodes)
     return port;
 }
 
+static EFI_STATUS find_supported_protocol(EFI_PCI_IO_PROTOCOL *p, UINT32 hcc,
+                                           UINT32 port, UINT8 *major,
+                                           UINT8 *slot_type)
+{
+    UINT32 off = ((hcc >> 16) & 0xffffU) * 4U;
+    UINT32 hdr, info, slot, next;
+    UINTN n = 0;
+    EFI_STATUS s;
+    *major = 0;
+    *slot_type = 0;
+    while (off && n++ < 64U) {
+        s = mr32(p, off, &hdr);
+        if (EFI_ERROR(s)) return s;
+        if ((hdr & 0xffU) == 2U) {
+            s = mr32(p, off + 8U, &info);
+            if (EFI_ERROR(s)) return s;
+            s = mr32(p, off + 12U, &slot);
+            if (EFI_ERROR(s)) return s;
+            {
+                UINT32 first = info & 0xffU;
+                UINT32 count = (info >> 8) & 0xffU;
+                if (count && port >= first && port < first + count) {
+                    *major = (UINT8)((hdr >> 24) & 0xffU);
+                    *slot_type = (UINT8)(slot & 0x1fU);
+                    return EFI_SUCCESS;
+                }
+            }
+        }
+        next = ((hdr >> 8) & 0xffU) * 4U;
+        if (!next) break;
+        off += next;
+    }
+    return EFI_NOT_FOUND;
+}
+
 static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
 {
     EFI_HANDLE *hs = NULL;
     UINTN n = 0, i, found = 0;
     EFI_STATUS s;
-
     s = LibLocateHandle(ByProtocol, &UsbIoGuid, NULL, &n, &hs);
     if (EFI_ERROR(s)) return EFI_NOT_FOUND;
-
     for (i = 0; i < n; ++i) {
         EFI_USB_IO_PROTOCOL *usb = NULL;
         EFI_USB_INTERFACE_DESCRIPTOR in;
@@ -331,31 +357,19 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         EFI_DEVICE_PATH_PROTOCOL *path;
         UINTN j, usb_nodes = 0;
         UINT8 port, pci_dev, pci_fun;
-
         if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, hs[i],
                                          &UsbIoGuid, (void **)&usb,
                                          image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
             continue;
-        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetInterfaceDescriptor, 3,
-                                         usb, &in)))
-            continue;
+        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetInterfaceDescriptor, 3, usb, &in))) continue;
         if (in.InterfaceClass != USB_CLASS_HID ||
             in.InterfaceSubClass != HID_SUBCLASS_BOOT ||
-            in.InterfaceProtocol != HID_PROTOCOL_KEYBOARD)
-            continue;
-        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 2,
-                                         usb, &dd)))
-            continue;
-        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 2,
-                                         usb, &cd)))
-            continue;
-
+            in.InterfaceProtocol != HID_PROTOCOL_KEYBOARD) continue;
+        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 2, usb, &dd))) continue;
+        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 2, usb, &cd))) continue;
         path = DevicePathFromHandle(hs[i]);
         port = root_port(path, &usb_nodes);
-        if (!port || usb_nodes != 1U ||
-            !path_last_pci_bdf(path, &pci_dev, &pci_fun))
-            continue;
-
+        if (!port || usb_nodes != 1U || !path_last_pci_bdf(path, &pci_dev, &pci_fun)) continue;
         d->port = port;
         d->pci_device = pci_dev;
         d->pci_function = pci_fun;
@@ -367,28 +381,22 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         d->mps = 0;
         d->interval = 0;
         d->ep0_mps = dd.MaxPacketSize0;
-
         for (j = 0; j < in.NumEndpoints && j < 16U; ++j) {
-            if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetEndpointDescriptor,
-                                             3, usb, (UINT8)j, &ep)))
-                continue;
-            if ((ep.EndpointAddress & 0x80U) &&
-                ((ep.Attributes & 3U) == 3U)) {
+            if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetEndpointDescriptor, 3,
+                                             usb, (UINT8)j, &ep))) continue;
+            if ((ep.EndpointAddress & 0x80U) && ((ep.Attributes & 3U) == 3U)) {
                 d->endpoint = ep.EndpointAddress;
                 d->mps = ep.MaxPacketSize;
                 d->interval = ep.Interval;
                 break;
             }
         }
-
         if (!d->endpoint) continue;
-        ++found;
-        if (found > 1U) {
+        if (++found > 1U) {
             uefi_call_wrapper(BS->FreePool, 1, hs);
             return EFI_ABORTED;
         }
     }
-
     if (hs) uefi_call_wrapper(BS->FreePool, 1, hs);
     return found == 1U ? EFI_SUCCESS : EFI_NOT_FOUND;
 }
@@ -399,38 +407,27 @@ static EFI_STATUS find_xhci(EFI_PCI_IO_PROTOCOL **out, EFI_HANDLE *out_handle,
     EFI_HANDLE *hs = NULL;
     EFI_STATUS s;
     UINTN n = 0, i;
-
     s = LibLocateHandle(ByProtocol, &PciGuid, NULL, &n, &hs);
     if (EFI_ERROR(s)) return s;
-
     for (i = 0; i < n; ++i) {
         EFI_PCI_IO_PROTOCOL *q = NULL;
         EFI_DEVICE_PATH_PROTOCOL *path;
         UINT32 cls = 0, id = 0;
         UINT8 dev, fun;
-
         if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, hs[i], &PciGuid,
                                          (void **)&q, image, NULL,
-                                         EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
-            continue;
-        if (EFI_ERROR(cfg32(q, 8, &cls)) || EFI_ERROR(cfg32(q, 0, &id)))
-            continue;
+                                         EFI_OPEN_PROTOCOL_GET_PROTOCOL))) continue;
+        if (EFI_ERROR(cfg32(q, 8, &cls)) || EFI_ERROR(cfg32(q, 0, &id))) continue;
         if (((cls >> 24) & 0xffU) != XHCI_CLASS ||
             ((cls >> 16) & 0xffU) != XHCI_SUBCLASS ||
-            ((cls >> 8) & 0xffU) != XHCI_PROG_IF)
-            continue;
-
+            ((cls >> 8) & 0xffU) != XHCI_PROG_IF) continue;
         path = DevicePathFromHandle(hs[i]);
-        if (!path_last_pci_bdf(path, &dev, &fun) ||
-            dev != want_dev || fun != want_fun)
-            continue;
-
+        if (!path_last_pci_bdf(path, &dev, &fun) || dev != want_dev || fun != want_fun) continue;
         *out = q;
         *out_handle = hs[i];
         uefi_call_wrapper(BS->FreePool, 1, hs);
         return EFI_SUCCESS;
     }
-
     uefi_call_wrapper(BS->FreePool, 1, hs);
     return EFI_NOT_FOUND;
 }
@@ -465,8 +462,7 @@ static void init_link_trb(struct dma_obj *ring, UINTN trbs)
     r[n * 4U + 0U] = (UINT32)base;
     r[n * 4U + 1U] = (UINT32)(base >> 32);
     r[n * 4U + 2U] = 0;
-    r[n * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE |
-                      (TRB_LINK << TRB_TYPE_SHIFT);
+    r[n * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE | (TRB_LINK << TRB_TYPE_SHIFT);
 }
 
 static void init_command_trb(VOID *ring, UINTN index, UINT32 dword3)
@@ -498,15 +494,12 @@ static EFI_STATUS prepare_input_context(struct dma_obj *input,
     UINT32 *c = (UINT32 *)input->host;
     UINT32 *slot = (UINT32 *)((UINT8 *)c + stride);
     UINT32 *ep0 = (UINT32 *)((UINT8 *)c + stride * 2U);
-
     uefi_call_wrapper(BS->SetMem, 3, input->host, EFI_PAGE_BYTES, 0);
     c[0] = 0;
     c[1] = INPUT_SLOT_FLAG | INPUT_EP0_FLAG;
-    slot[0] = ((UINT32)speed << DEV_SPEED_SHIFT) |
-              (1U << LAST_CTX_SHIFT);
+    slot[0] = ((UINT32)speed << DEV_SPEED_SHIFT) | (1U << LAST_CTX_SHIFT);
     slot[1] = (UINT32)root_port_value << ROOT_HUB_PORT_SHIFT;
-    ep0[0] = (3U << EP_CERR_SHIFT) |
-             (EP_TYPE_CONTROL << EP_TYPE_SHIFT) |
+    ep0[0] = (3U << EP_CERR_SHIFT) | (EP_TYPE_CONTROL << EP_TYPE_SHIFT) |
              ((UINT32)ep0_mps << EP0_MPS_SHIFT);
     ep0[2] = (UINT32)ep0_ring->dev | EP0_DCS;
     ep0[3] = (UINT32)(ep0_ring->dev >> 32);
@@ -518,8 +511,7 @@ static EFI_STATUS event_peek(struct dma_obj *ev, UINTN index, BOOLEAN cycle,
 {
     UINT32 *r = (UINT32 *)ev->host;
     UINT32 w3 = r[index * 4U + 3U];
-    if ((w3 & TRB_CYCLE) != (cycle ? TRB_CYCLE : 0U))
-        return EFI_NOT_READY;
+    if ((w3 & TRB_CYCLE) != (cycle ? TRB_CYCLE : 0U)) return EFI_NOT_READY;
     *d0 = r[index * 4U + 0U];
     *d1 = r[index * 4U + 1U];
     *d2 = r[index * 4U + 2U];
@@ -565,8 +557,7 @@ static EFI_STATUS ack_interrupter(EFI_PCI_IO_PROTOCOL *p, UINT32 ir)
     UINT32 iman;
     EFI_STATUS s = mr32(p, ir, &iman);
     if (EFI_ERROR(s)) return s;
-    if (iman & IMAN_IP)
-        return mw32(p, ir, IMAN_IP);
+    if (iman & IMAN_IP) return mw32(p, ir, IMAN_IP);
     return EFI_SUCCESS;
 }
 
@@ -577,7 +568,6 @@ static EFI_STATUS drain_preexisting_events(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
     UINTN n;
     UINT32 d0, d1, d2, d3, type;
     EFI_STATUS s;
-
     for (n = 0; n < MAX_PREEXISTING_EVENTS; ++n) {
         s = event_peek(ev, *index, *cycle, &d0, &d1, &d2, &d3);
         if (EFI_ERROR(s)) return EFI_SUCCESS;
@@ -606,8 +596,7 @@ static EFI_STATUS wait_command_completion(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
     slot = (d3 >> SLOT_ID_SHIFT) & 0xffU;
     *completion = (d2 >> 24) & 0xffU;
     if (type != TRB_COMMAND_COMPLETION || ptr != cmd_dev ||
-        !slot || slot > maxslots)
-        return EFI_DEVICE_ERROR;
+        !slot || slot > maxslots) return EFI_DEVICE_ERROR;
     *slot_id = (UINT8)slot;
     return ack_interrupter(p, ir);
 }
@@ -615,8 +604,7 @@ static EFI_STATUS wait_command_completion(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
 static void fatal_running(void)
 {
     Print(u"\r\nFATAL: XHCI RUNNING STATE UNCERTAIN\r\n");
-    Print(u"DMA MAPPINGS RETAINED / NO FREE\r\n");
-    Print(u"MANUAL RECOVERY REQUIRED\r\n");
+    Print(u"DMA MAPPINGS RETAINED / NO FREE\r\nMANUAL RECOVERY REQUIRED\r\n");
     for (;;) uefi_call_wrapper(BS->Stall, 1, 1000000);
 }
 
@@ -836,10 +824,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         if (EFI_ERROR(s)) { remember_fail(u"PORT", u"CLEAR CHANGE BITS", s); goto out; }
     }
 
-    if (protocol_major == 3U)
-        s = port_write(p, op, d.port, PORT_WR);
-    else
-        s = port_write(p, op, d.port, PORT_PR);
+    s = port_write(p, op, d.port, protocol_major == 3U ? PORT_WR : PORT_PR);
     if (EFI_ERROR(s)) { remember_fail(u"PORT", u"ASSERT PORT RESET", s); goto out; }
 
     {
