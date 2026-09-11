@@ -58,11 +58,12 @@
 #define PORT_WRC (1U << 19)
 #define PORT_PRC (1U << 21)
 #define PORT_WR (1U << 31)
-#define PORT_LWS (1U << 16)
 
+/* Match Linux xHCI's neutral PORTSC write policy: preserve RO and ordinary
+ * RW bits which software is allowed to rewrite, but do not rewrite LWS or
+ * any RW1S/RW1CS operation bits except those explicitly requested. */
 #define PORT_RO ((1U << 0) | (1U << 3) | (0xFU << 10) | (1U << 30))
 #define PORT_RWS ((0xFU << 5) | (1U << 9) | (3U << 14) | (7U << 25))
-#define PORT_RW PORT_LWS
 
 #define CMD_TRBS 256U
 #define EVENT_TRBS 16U
@@ -359,11 +360,9 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         UINT8 port, pci_dev, pci_fun;
         if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, hs[i],
                                          &UsbIoGuid, (void **)&usb,
-                                         image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
-            continue;
+                                         image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL))) continue;
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetInterfaceDescriptor, 3, usb, &in))) continue;
-        if (in.InterfaceClass != USB_CLASS_HID ||
-            in.InterfaceSubClass != HID_SUBCLASS_BOOT ||
+        if (in.InterfaceClass != USB_CLASS_HID || in.InterfaceSubClass != HID_SUBCLASS_BOOT ||
             in.InterfaceProtocol != HID_PROTOCOL_KEYBOARD) continue;
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 2, usb, &dd))) continue;
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 2, usb, &cd))) continue;
@@ -412,12 +411,12 @@ static EFI_STATUS find_xhci(EFI_PCI_IO_PROTOCOL **out, EFI_HANDLE *out_handle,
     for (i = 0; i < n; ++i) {
         EFI_PCI_IO_PROTOCOL *q = NULL;
         EFI_DEVICE_PATH_PROTOCOL *path;
-        UINT32 cls = 0, id = 0;
+        UINT32 cls = 0;
         UINT8 dev, fun;
         if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, hs[i], &PciGuid,
                                          (void **)&q, image, NULL,
                                          EFI_OPEN_PROTOCOL_GET_PROTOCOL))) continue;
-        if (EFI_ERROR(cfg32(q, 8, &cls)) || EFI_ERROR(cfg32(q, 0, &id))) continue;
+        if (EFI_ERROR(cfg32(q, 8, &cls))) continue;
         if (((cls >> 24) & 0xffU) != XHCI_CLASS ||
             ((cls >> 16) & 0xffU) != XHCI_SUBCLASS ||
             ((cls >> 8) & 0xffU) != XHCI_PROG_IF) continue;
@@ -441,7 +440,7 @@ static EFI_STATUS xhci_port_read(EFI_PCI_IO_PROTOCOL *p, UINT32 op,
 
 static UINT32 port_neutral(UINT32 x)
 {
-    return x & (PORT_RO | PORT_RWS | PORT_RW);
+    return x & (PORT_RO | PORT_RWS);
 }
 
 static EFI_STATUS port_write(EFI_PCI_IO_PROTOCOL *p, UINT32 op,
@@ -595,8 +594,8 @@ static EFI_STATUS wait_command_completion(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
     ptr = ((UINT64)d1 << 32) | d0;
     slot = (d3 >> SLOT_ID_SHIFT) & 0xffU;
     *completion = (d2 >> 24) & 0xffU;
-    if (type != TRB_COMMAND_COMPLETION || ptr != cmd_dev ||
-        !slot || slot > maxslots) return EFI_DEVICE_ERROR;
+    if (type != TRB_COMMAND_COMPLETION || ptr != cmd_dev || !slot || slot > maxslots)
+        return EFI_DEVICE_ERROR;
     *slot_id = (UINT8)slot;
     return ack_interrupter(p, ir);
 }
@@ -830,7 +829,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     {
         UINTN loops;
         for (loops = 0; loops < 10000U; ++loops) {
-            UINT32 reset_busy = (protocol_major == 3U) ? (PORT_WR | PORT_PR) : PORT_PR;
+            UINT32 reset_busy = (protocol_major == 3U) ? PORT_WR : PORT_PR;
             UINT32 change_done = (protocol_major == 3U) ? (PORT_PRC | PORT_WRC) : PORT_PRC;
             s = xhci_port_read(p, op, d.port, &portsc);
             if (EFI_ERROR(s)) { remember_fail(u"PORT", u"RESET POLL", s); goto out; }
