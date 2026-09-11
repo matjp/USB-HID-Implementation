@@ -10,6 +10,12 @@ static UINTN page_rows = PAGER_DEFAULT_ROWS;
 static UINTN page_usable_rows = PAGER_DEFAULT_ROWS - PAGER_RESERVED_ROWS;
 static UINTN page_lines = 0;
 
+static void pager_clear(void)
+{
+    if (ST->ConOut && ST->ConOut->ClearScreen)
+        uefi_call_wrapper(ST->ConOut->ClearScreen, 1, ST->ConOut);
+}
+
 static void pager_init(void)
 {
     UINTN columns = 0;
@@ -29,6 +35,7 @@ static void pager_init(void)
                      ? page_rows - PAGER_RESERVED_ROWS
                      : 1;
     page_lines = 0;
+    pager_clear();
 }
 
 static void wait_for_key(void)
@@ -45,8 +52,10 @@ static void wait_for_key(void)
 
 static void page_wait(void)
 {
-    Output(u"\r\nPRESS A KEY\r\n");
+    /* The footer occupies one physical screen line. */
+    Output(u"PRESS A KEY\r\n");
     wait_for_key();
+    pager_clear();
     page_lines = 0;
 }
 
