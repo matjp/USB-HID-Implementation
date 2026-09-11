@@ -3,11 +3,6 @@ name: Build EFI Test
 # V28 compatibility header is maintained under efi/usb_io_compat.h.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "efi/xhci_mmio_v32.4.c"
-      - ".github/workflows/build-efi.yml"
   workflow_dispatch:
     inputs:
       test_id:
