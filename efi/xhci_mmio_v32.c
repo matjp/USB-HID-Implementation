@@ -998,7 +998,11 @@ out:
         Print(u"CONTROLLER HALTED / RESET / POINTERS CLEARED BEFORE DMA RELEASE\r\n");
     }
 
-    Print(u"\r\nPRESS ANY KEY TO EXIT...\r\n");
-    uefi_call_wrapper(BS->WaitForEvent, 3, 1, &ST->ConIn->WaitForKey, NULL);
+    {
+        UINTN wait_index = 0;
+        EFI_EVENT wait_event = ST->ConIn->WaitForKey;
+        Print(u"\r\nPRESS ANY KEY TO EXIT...\r\n");
+        uefi_call_wrapper(BS->WaitForEvent, 3, 1, &wait_event, &wait_index);
+    }
     return s;
 }
