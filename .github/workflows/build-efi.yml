@@ -3,22 +3,27 @@ name: Build EFI Test
 # V28 compatibility header is maintained under efi/usb_io_compat.h.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "efi/xhci_mmio_v32.c"
+      - ".github/workflows/build-efi.yml"
   workflow_dispatch:
     inputs:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v32.4"
+        default: "v32"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v32.4.c"
+        default: "efi/xhci_mmio_v32.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V32.4 / PAGED PORT STATE DIAGNOSTIC"
+        default: "xHCI V32 / Gate 6 / PORT RESET + ADDRESS DEVICE"
         type: string
 
 concurrency:
@@ -33,9 +38,9 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v32.4' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v32.4.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V32.4 / PAGED PORT STATE DIAGNOSTIC' }}
+      TEST_ID: ${{ inputs.test_id || 'v32' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v32.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V32 / Gate 6 / PORT RESET + ADDRESS DEVICE' }}
 
     steps:
       - uses: actions/checkout@v4
