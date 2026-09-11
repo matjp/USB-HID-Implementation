@@ -31,17 +31,22 @@ static void pager_init(void)
     page_lines = 0;
 }
 
-static void page_wait(void)
+static void wait_for_key(void)
 {
     EFI_INPUT_KEY key;
     EFI_STATUS s;
 
-    Output(u"\r\nPRESS A KEY\r\n");
     for (;;) {
         s = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key);
         if (!EFI_ERROR(s)) break;
         uefi_call_wrapper(BS->Stall, 1, 10000);
     }
+}
+
+static void page_wait(void)
+{
+    Output(u"\r\nPRESS A KEY\r\n");
+    wait_for_key();
     page_lines = 0;
 }
 
@@ -63,6 +68,7 @@ static UINTN paged_Print(const CHAR16 *fmt, ...)
     va_list args;
     UINTN r;
     UINTN lines;
+    BOOLEAN final_prompt = FALSE;
 
     va_start(args, fmt);
     r = VSPrint(buffer, sizeof(buffer), fmt, args);
@@ -71,6 +77,11 @@ static UINTN paged_Print(const CHAR16 *fmt, ...)
     if (!StrCmp(fmt, u"TOSHIBA xHCI V32.3 / PORT STATE DIAGNOSTIC\r\n"))
         StrCpy(buffer, u"TOSHIBA xHCI V32.4 / PORT STATE DIAGNOSTIC\r\n");
 
+    if (!StrCmp(fmt, u"PASS / 5 SEC...\r\n")) {
+        StrCpy(buffer, u"PRESS A KEY\r\n");
+        final_prompt = TRUE;
+    }
+
     lines = count_lines(buffer);
     if (lines && page_lines && page_lines + lines > page_usable_rows)
         page_wait();
@@ -78,16 +89,22 @@ static UINTN paged_Print(const CHAR16 *fmt, ...)
     Output(buffer);
     page_lines += lines;
 
-    if (page_lines >= page_usable_rows)
+    if (final_prompt) {
+        wait_for_key();
+        page_lines = 0;
+    } else if (page_lines >= page_usable_rows) {
         page_wait();
+    }
 
     return r;
 }
 
 #define Print paged_Print
+#define XHCI_V32_NO_FINAL_DELAY 1
 #define efi_main xhci_v32_3_main
 #include "xhci_mmio_v32.3.c"
 #undef efi_main
+#undef XHCI_V32_NO_FINAL_DELAY
 #undef Print
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
