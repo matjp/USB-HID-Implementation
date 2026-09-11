@@ -10,6 +10,9 @@ static UINTN page_rows = PAGER_DEFAULT_ROWS;
 static UINTN page_usable_rows = PAGER_DEFAULT_ROWS - PAGER_RESERVED_ROWS;
 static UINTN page_lines = 0;
 
+static UINT32 runtime_base = 0;
+static BOOLEAN runtime_base_valid = FALSE;
+
 static void pager_clear(void)
 {
     if (ST->ConOut && ST->ConOut->ClearScreen)
@@ -100,6 +103,7 @@ static UINTN paged_Print(const CHAR16 *fmt, ...)
 
     if (final_prompt) {
         wait_for_key();
+        pager_clear();
         page_lines = 0;
     } else if (page_lines >= page_usable_rows) {
         page_wait();
@@ -108,13 +112,44 @@ static UINTN paged_Print(const CHAR16 *fmt, ...)
     return r;
 }
 
+static EFI_STATUS paged_mw32(EFI_PCI_IO_PROTOCOL *p, UINT32 o, UINT32 v);
+
 #define Print paged_Print
+#define mw32 paged_mw32
 #define XHCI_V32_NO_FINAL_DELAY 1
 #define efi_main xhci_v32_3_main
 #include "xhci_mmio_v32.3.c"
 #undef efi_main
 #undef XHCI_V32_NO_FINAL_DELAY
+#undef mw32
 #undef Print
+
+static EFI_STATUS paged_mw32(EFI_PCI_IO_PROTOCOL *p, UINT32 o, UINT32 v)
+{
+    UINT32 actual = o;
+
+    /* V32.3 used fixed primary-interrupter offsets. Translate those
+     * accesses through the controller's RTSOFF instead. */
+    if (o == 0x28U || o == 0x30U || o == 0x34U ||
+        o == 0x38U || o == 0x3cU) {
+        if (!runtime_base_valid) {
+            UINT32 rtsoff = 0;
+            EFI_STATUS s;
+
+            s = uefi_call_wrapper(p->Mem.Read, 6, p, EfiPciIoWidthUint32,
+                                  0, (UINT64)0x18U, 1, &rtsoff);
+            if (EFI_ERROR(s))
+                return s;
+            runtime_base = rtsoff & ~0x1fU;
+            runtime_base_valid = TRUE;
+        }
+
+        actual = runtime_base + (o - 0x20U);
+    }
+
+    return uefi_call_wrapper(p->Mem.Write, 6, p, EfiPciIoWidthUint32,
+                             0, (UINT64)actual, 1, &v);
+}
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 {
