@@ -16,8 +16,8 @@ static void pager_init(void)
     UINTN rows = 0;
     EFI_STATUS s;
 
-    if (ST->ConOut && ST->ConOut->Mode && ST->ConOut->Mode->QueryMode) {
-        s = uefi_call_wrapper(ST->ConOut->Mode->QueryMode, 4,
+    if (ST->ConOut && ST->ConOut->QueryMode) {
+        s = uefi_call_wrapper(ST->ConOut->QueryMode, 4,
                               ST->ConOut,
                               ST->ConOut->Mode->Mode,
                               &columns, &rows);
@@ -68,10 +68,8 @@ static UINTN paged_Print(const CHAR16 *fmt, ...)
     r = VSPrint(buffer, sizeof(buffer), fmt, args);
     va_end(args);
 
-    if (!StrCmp(fmt, u"TOSHIBA xHCI V32.3 / PORT STATE DIAGNOSTIC\r\n")) {
-        VSPrint(buffer, sizeof(buffer),
-                u"TOSHIBA xHCI V32.4 / PORT STATE DIAGNOSTIC\r\n");
-    }
+    if (!StrCmp(fmt, u"TOSHIBA xHCI V32.3 / PORT STATE DIAGNOSTIC\r\n"))
+        StrCpy(buffer, u"TOSHIBA xHCI V32.4 / PORT STATE DIAGNOSTIC\r\n");
 
     lines = count_lines(buffer);
     if (lines && page_lines && page_lines + lines > page_usable_rows)
