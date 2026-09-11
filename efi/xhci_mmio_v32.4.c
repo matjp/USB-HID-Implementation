@@ -83,7 +83,7 @@ static void pager_wait(void)
     EFI_INPUT_KEY key;
     EFI_STATUS s;
 
-    VPrint(u"PRESS A KEY\r\n", (va_list){0});
+    Print(u"PRESS A KEY\r\n");
     for (;;) {
         s = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key);
         if (!EFI_ERROR(s)) break;
@@ -132,16 +132,8 @@ static void pager_finish(void)
 {
     if (page_lines)
         pager_wait();
-    else {
-        VPrint(u"PRESS A KEY\r\n", (va_list){0});
-        for (;;) {
-            EFI_INPUT_KEY key;
-            EFI_STATUS s = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
-                                             ST->ConIn, &key);
-            if (!EFI_ERROR(s)) break;
-            uefi_call_wrapper(BS->Stall, 1, 10000);
-        }
-    }
+    else
+        pager_wait();
 }
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
