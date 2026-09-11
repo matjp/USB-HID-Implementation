@@ -349,6 +349,7 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
     EFI_STATUS s;
     s = LibLocateHandle(ByProtocol, &UsbIoGuid, NULL, &n, &hs);
     if (EFI_ERROR(s)) return EFI_NOT_FOUND;
+    Print(u"DISC USBIO HANDLES=%u\r\n", n);
     for (i = 0; i < n; ++i) {
         EFI_USB_IO_PROTOCOL *usb = NULL;
         EFI_USB_INTERFACE_DESCRIPTOR in;
@@ -363,10 +364,20 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetInterfaceDescriptor, 3, usb, &in))) continue;
         if (in.InterfaceClass != USB_CLASS_HID || in.InterfaceSubClass != HID_SUBCLASS_BOOT ||
             in.InterfaceProtocol != HID_PROTOCOL_KEYBOARD) continue;
-        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 2, usb, &dd))) continue;
+        Print(u"DISC HID i=%u IF=%u EPs=%u\r\n", i, in.InterfaceNumber, in.NumEndpoints);
+        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 2, usb, &dd))) {
+            Print(u"DISC REJECT i=%u DEVICE DESCRIPTOR\r\n");
+            continue;
+        }
         path = DevicePathFromHandle(hs[i]);
         port = root_port(path, &usb_nodes);
-        if (!port || usb_nodes != 1U || !path_last_pci_bdf(path, &pci_dev, &pci_fun)) continue;
+        if (!port || usb_nodes != 1U || !path_last_pci_bdf(path, &pci_dev, &pci_fun)) {
+            Print(u"DISC REJECT i=%u PORT=%u USBNODES=%u BDF=%s\r\n",
+                  i, port, usb_nodes, path_last_pci_bdf(path, &pci_dev, &pci_fun) ? u"YES" : u"NO");
+            continue;
+        }
+        Print(u"DISC PATH i=%u PORT=%u USBNODES=%u BDF=%02x:%u\r\n",
+              i, port, usb_nodes, pci_dev, pci_fun);
         d->port = port;
         d->pci_device = pci_dev;
         d->pci_function = pci_fun;
@@ -388,7 +399,10 @@ static EFI_STATUS discover_keyboard(struct discovery *d, EFI_HANDLE image)
                 break;
             }
         }
-        if (!d->endpoint) continue;
+        if (!d->endpoint) {
+            Print(u"DISC REJECT i=%u NO INTERRUPT-IN\r\n", i);
+            continue;
+        }
         if (++found > 1U) {
             uefi_call_wrapper(BS->FreePool, 1, hs);
             return EFI_ABORTED;
