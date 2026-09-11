@@ -142,7 +142,9 @@ static void put64(VOID *b, UINTN off, UINT64 v) { put32(b,off,(UINT32)v); put32(
 
 static void fatal_running(void)
 {
- Print(u"\r\nFATAL: XHCI RUNNING STATE UNCERTAIN\r\nDMA MAPPINGS RETAINED / NO FREE\r\nMANUAL RECOVERY REQUIRED\r\n");
+ Print(u"\r\nFATAL: XHCI RUNNING STATE UNCERTAIN\r\n");
+ Print(u"FAIL STAGE=%s OP=%s STATUS=%r\r\n",fail_stage,fail_op,fail_status);
+ Print(u"DMA MAPPINGS RETAINED / NO FREE\r\nMANUAL RECOVERY REQUIRED\r\n");
  for(;;) uefi_call_wrapper(BS->Stall,1,1000000);
 }
 
@@ -174,9 +176,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  maxslots=hcs1&255U; scratchpads=(((hcs2>>21)&31U)<<5)|((hcs2>>27)&31U); ctxsz=(hcc&CTX_CSZ)?64:32;
  if(!(hcc&HCC_AC64)){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"AC64",s);goto out;}
  s=mr32(p,op+8,&ps);reads++;if(EFI_ERROR(s)||!ps){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGESIZE",s);goto out;}
- while(shift<32 && !(ps&(1U<<shift))) {
-  shift++;
- }
+ while(shift<32 && !(ps&(1U<<shift))) { shift++; }
  if(shift>=32){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE BIT",s);goto out;}
  xpage=(UINTN)1U<<(12+shift);
  if(xpage!=4096U){s=EFI_UNSUPPORTED;remember_fail(u"CAPS",u"PAGE SIZE",s);goto out;}
@@ -209,8 +209,33 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
  s=mw64(p,op+0x30,dcbaa_d.dev);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"DCBAAP",s);goto out;}s=mw32(p,op+0x38,1);writes++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"CONFIG",s);goto out;}s=mw64(p,op+0x18,cr_d.dev|1ULL);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"CRCR",s);goto out;}s=mw32(p,ir+8,1);writes++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"ERSTSZ",s);goto out;}s=mw64(p,ir+0x10,erst_d.dev&~63ULL);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"ERSTBA",s);goto out;}s=mw64(p,ir+0x18,ev_d.dev&~15ULL);writes+=2;if(EFI_ERROR(s)){remember_fail(u"INIT",u"ERDP",s);goto out;}
  s=mr32(p,ir,&iman);reads++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"IMAN",s);goto out;}s=mw32(p,ir,iman&~IMAN_IE);writes++;if(EFI_ERROR(s)){remember_fail(u"INIT",u"IRQ DISABLE",s);goto out;}
 
- s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBCMD",s);goto out;}started=TRUE;halted=FALSE;s=mw32(p,op,(cmd&~(CMD_INTE|CMD_HSEE))|CMD_RUN);writes++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"START",s);fatal_running();}
+ /* Diagnostic-only RUN transition instrumentation.  No xHCI behavior changes. */
+ s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBCMD PRE",s);goto out;}
+ s=mr32(p,op+4,&status);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBSTS PRE",s);goto out;}
+ { UINT32 cfg=0,erstsz=0,iman_pre=0,dcbaal=0,dcbaah=0,crcrl=0,crcrh=0,erstbal=0,erstbah=0,erdpl=0,erdph=0;
+  s=mr32(p,op+0x38,&cfg);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"CONFIG PRE",s);goto out;}
+  s=mr32(p,op+0x30,&dcbaal);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"DCBAAP PRE",s);goto out;}
+  s=mr32(p,op+0x34,&dcbaah);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"DCBAAP HI PRE",s);goto out;}
+  s=mr32(p,op+0x18,&crcrl);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"CRCR PRE",s);goto out;}
+  s=mr32(p,op+0x1c,&crcrh);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"CRCR HI PRE",s);goto out;}
+  s=mr32(p,ir+8,&erstsz);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"ERSTSZ PRE",s);goto out;}
+  s=mr32(p,ir+0x10,&erstbal);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"ERSTBA PRE",s);goto out;}
+  s=mr32(p,ir+0x14,&erstbah);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"ERSTBA HI PRE",s);goto out;}
+  s=mr32(p,ir+0x18,&erdpl);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"ERDP PRE",s);goto out;}
+  s=mr32(p,ir+0x1c,&erdph);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"ERDP HI PRE",s);goto out;}
+  s=mr32(p,ir,&iman_pre);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"IMAN PRE",s);goto out;}
+  Print(u"PRE-RUN: CMD=%08x STS=%08x CFG=%08x DCBAAP=%08x/%08x CRCR=%08x/%08x\r\n",cmd,status,cfg,dcbaah,dcbaal,crcrh,crcrl);
+  Print(u"PRE-RUN: ERSTSZ=%08x ERSTBA=%08x/%08x ERDP=%08x/%08x IMAN=%08x\r\n",erstsz,erstbah,erstbal,erdph,erdpl,iman_pre);
+ }
+ started=TRUE;halted=FALSE;s=mw32(p,op,(cmd&~(CMD_INTE|CMD_HSEE))|CMD_RUN);writes++;
+ if(EFI_ERROR(s)){remember_fail(u"RUN",u"START WRITE",s);fatal_running();}
+ s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBCMD POST",s);fatal_running();}
+ s=mr32(p,op+4,&status);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBSTS POST",s);fatal_running();}
+ Print(u"RUN WRITE: EFI=Success CMD=%08x STS=%08x HCH=%u CNR=%u\r\n",cmd,status,(status&STS_HCH)?1:0,(status&STS_CNR)?1:0);
  s=wait_hch(p,op,FALSE,1000,&status,&reads);if(EFI_ERROR(s)){remember_fail(u"RUN",u"HCH CLEAR",s);fatal_running();}
+ s=mr32(p,op,&cmd);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBCMD RUNNING",s);fatal_running();}
+ s=mr32(p,op+4,&status);reads++;if(EFI_ERROR(s)){remember_fail(u"RUN",u"USBSTS RUNNING",s);fatal_running();}
+ Print(u"RUN POLL: CMD=%08x STS=%08x HCH=%u CNR=%u PASS\r\n",cmd,status,(status&STS_HCH)?1:0,(status&STS_CNR)?1:0);
 
  port_off=op+PORTSC_BASE+(EXPECTED_PORT-1)*0x10U;
  s=mr32(p,port_off,&portsc);reads++;if(EFI_ERROR(s)){remember_fail(u"PORT",u"READ",s);fatal_running();}
