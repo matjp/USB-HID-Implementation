@@ -8,17 +8,17 @@ on:
       test_id:
         description: "Artifact/test identifier"
         required: true
-        default: "v32.1"
+        default: "v32.2"
         type: string
       source:
         description: "EFI C source path"
         required: true
-        default: "efi/xhci_mmio_v32.1.c"
+        default: "efi/xhci_mmio_v32.2.c"
         type: string
       label:
         description: "Human-readable test label"
         required: true
-        default: "xHCI V32.1 / CONFIG OFFSET FIX"
+        default: "xHCI V32.2 / CRCR READBACK FIX"
         type: string
 
 concurrency:
@@ -33,9 +33,9 @@ jobs:
     permissions:
       contents: read
     env:
-      TEST_ID: ${{ inputs.test_id || 'v32.1' }}
-      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v32.1.c' }}
-      LABEL: ${{ inputs.label || 'xHCI V32.1 / CONFIG OFFSET FIX' }}
+      TEST_ID: ${{ inputs.test_id || 'v32.2' }}
+      SOURCE: ${{ inputs.source || 'efi/xhci_mmio_v32.2.c' }}
+      LABEL: ${{ inputs.label || 'xHCI V32.2 / CRCR READBACK FIX' }}
 
     steps:
       - uses: actions/checkout@v4
