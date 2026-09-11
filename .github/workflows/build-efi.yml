@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'Build ') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
     name: Build EFI test
     runs-on: ubuntu-latest
     permissions:
