@@ -87,13 +87,71 @@ jobs:
           git ls-files --error-unmatch -- "$SOURCE" >/dev/null 2>&1 || { echo "ERROR: source not tracked: $SOURCE" >&2; exit 1; }
           EFI_COMMIT="$(git log -1 --format=%H -- "$SOURCE")"
           test -n "$EFI_COMMIT"
+          cp "$SOURCE" "build/$TEST_ID/$TEST_ID.c"
           printf 'BUILD_COMMIT=%s\nEFI_COMMIT=%s\nSOURCE_PATH=%s\nTEST_ID=%s\n' "$BUILD_SHA" "$EFI_COMMIT" "$SOURCE" "$TEST_ID" > "build/$TEST_ID/BUILD-PROVENANCE.txt"
           cat "build/$TEST_ID/BUILD-PROVENANCE.txt"
+
+      - name: Apply V32.4 pager console fix
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("build") / "${{ env.TEST_ID }}" / "${{ env.TEST_ID }}.c"
+          s = p.read_text()
+          old = '''static void pager_init(void)
+          {
+              UINTN columns = 0;
+              UINTN rows = 0;
+              EFI_STATUS s;
+
+              if (ST->ConOut && ST->ConOut->QueryMode) {
+                  s = uefi_call_wrapper(ST->ConOut->QueryMode, 4,
+                                        ST->ConOut,
+                                        ST->ConOut->Mode->Mode,
+                                        &columns, &rows);
+                  if (!EFI_ERROR(s) && rows >= 2)
+                      page_rows = rows;
+              }
+
+              page_usable_rows = (page_rows > PAGER_RESERVED_ROWS)
+                               ? page_rows - PAGER_RESERVED_ROWS
+                               : 1;
+              page_lines = 0;
+              pager_clear();
+          }'''
+          new = '''static void pager_init(void)
+          {
+              UINTN rows = PAGER_DEFAULT_ROWS;
+
+              /* Use the active console mode directly.  QueryMode() is not needed
+               * here and some firmware console implementations do not behave
+               * reliably when queried during early EFI application startup. */
+              if (ST && ST->ConOut && ST->ConOut->Mode &&
+                  ST->ConOut->Mode->Rows >= 2)
+                  rows = ST->ConOut->Mode->Rows;
+
+              page_rows = rows;
+              page_usable_rows = (page_rows > PAGER_RESERVED_ROWS)
+                               ? page_rows - PAGER_RESERVED_ROWS
+                               : 1;
+              page_lines = 0;
+          }'''
+          if old not in s:
+              raise SystemExit("ERROR: expected pager_init block not found")
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -A20 -B2 'static void pager_init' "build/$TEST_ID/$TEST_ID.c"
 
       - name: Compile
         run: |
           set -euxo pipefail
-          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" -fpic -ffreestanding -fno-stack-protector -fno-stack-check -fshort-wchar -mno-red-zone -maccumulate-outgoing-args -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os -c "$SOURCE" -o "build/$TEST_ID/test.o"
+          gcc -I"$GNUEFI_INC" -I"$GNUEFI_INC/x86_64" -I"$GNUEFI_INC/protocol" -fpic -ffreestanding -fno-stack-protector -fno-stack-check -fshort-wchar -mno-red-zone -maccumulate-outgoing-args -DEFI_FUNCTION_WRAPPER -Wall -Wextra -Os -c "build/$TEST_ID/$TEST_ID.c" -o "build/$TEST_ID/test.o"
+
+      - name: Record patched source hash
+        run: |
+          set -euxo pipefail
+          printf 'PATCHED_SOURCE_SHA256=%s\n' "$(sha256sum "build/$TEST_ID/$TEST_ID.c" | cut -d' ' -f1)" >> "build/$TEST_ID/BUILD-PROVENANCE.txt"
+          cat "build/$TEST_ID/BUILD-PROVENANCE.txt"
 
       - name: Link
         run: |
@@ -114,6 +172,7 @@ jobs:
           mkdir -p "artifact/EFI-$TEST_ID"
           cp "build/$TEST_ID/BOOTX64.EFI" "artifact/EFI-$TEST_ID/BOOTX64.EFI"
           cp "build/$TEST_ID/BUILD-PROVENANCE.txt" "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
+          cp "build/$TEST_ID/$TEST_ID.c" "artifact/EFI-$TEST_ID/$TEST_ID.c"
           test -s "artifact/EFI-$TEST_ID/BOOTX64.EFI"
           test -s "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
 
