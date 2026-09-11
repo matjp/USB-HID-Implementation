@@ -485,7 +485,7 @@ static UINT32 ctx_stride(UINT32 hcc)
 
 static UINT16 ep0_mps_from_speed(UINT8 speed)
 {
-    if (speed <= 2U) return 8U;
+    if (speed == 1U || speed == 2U) return 8U;
     if (speed == 3U) return 64U;
     return 512U;
 }
@@ -500,23 +500,16 @@ static EFI_STATUS prepare_input_context(struct dma_obj *input,
     UINT32 *ep0 = (UINT32 *)((UINT8 *)c + stride * 2U);
 
     uefi_call_wrapper(BS->SetMem, 3, input->host, EFI_PAGE_BYTES, 0);
-
-    /* Input Control Context: Add Slot and Add EP0; no Drop flags. */
     c[0] = 0;
     c[1] = INPUT_SLOT_FLAG | INPUT_EP0_FLAG;
-
-    /* Input Slot Context: Route String 0, Device Speed, Last Context 1. */
     slot[0] = ((UINT32)speed << DEV_SPEED_SHIFT) |
               (1U << LAST_CTX_SHIFT);
     slot[1] = (UINT32)root_port_value << ROOT_HUB_PORT_SHIFT;
-
-    /* Input EP0 Context: control EP, CErr=3, MPS, DCS=1. */
     ep0[0] = (3U << EP_CERR_SHIFT) |
              (EP_TYPE_CONTROL << EP_TYPE_SHIFT) |
              ((UINT32)ep0_mps << EP0_MPS_SHIFT);
-    ep0[2] = (UINT32)ep0_ring->dev;
+    ep0[2] = (UINT32)ep0_ring->dev | EP0_DCS;
     ep0[3] = (UINT32)(ep0_ring->dev >> 32);
-    ep0[2] |= EP0_DCS;
     return EFI_SUCCESS;
 }
 
@@ -539,7 +532,6 @@ static EFI_STATUS event_advance(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
                                 BOOLEAN *cycle)
 {
     UINT64 deq;
-
     ++(*index);
     if (*index == EVENT_TRBS) {
         *index = 0;
@@ -556,7 +548,6 @@ static EFI_STATUS event_consume(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
 {
     EFI_STATUS s;
     UINTN i;
-
     for (i = 0; i < 10000U; ++i) {
         s = event_peek(ev, *index, *cycle, d0, d1, d2, d3);
         if (!EFI_ERROR(s)) {
@@ -608,7 +599,6 @@ static EFI_STATUS wait_command_completion(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
     UINT32 d0, d1, d2, d3, type, slot;
     UINT64 ptr;
     EFI_STATUS s;
-
     s = event_consume(p, ir, ev, index, cycle, &d0, &d1, &d2, &d3);
     if (EFI_ERROR(s)) return s;
     type = (d3 & TRB_TYPE_MASK) >> TRB_TYPE_SHIFT;
@@ -666,32 +656,21 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     Print(u"UEFI DISCOVERY / POLLED EVENTS / CPU INTERRUPTS DISABLED\r\n");
 
     s = discover_keyboard(&d, image);
-    if (EFI_ERROR(s)) {
-        remember_fail(u"DISCOVERY", u"BOOT KEYBOARD", s);
-        goto out;
-    }
+    if (EFI_ERROR(s)) { remember_fail(u"DISCOVERY", u"BOOT KEYBOARD", s); goto out; }
     Print(u"DISCOVERY: PORT=%u VID=%04x PID=%04x IF=%u EP=%02x MPS=%u EP0=%u INT=%u CFG=%u BDF=%u:%u\r\n",
           d.port, d.vid, d.pid, d.interface_number, d.endpoint, d.mps,
           d.ep0_mps, d.interval, d.config, d.pci_device, d.pci_function);
 
     s = find_xhci(&p, &xhci_handle, image, d.pci_device, d.pci_function);
-    if (EFI_ERROR(s)) {
-        remember_fail(u"PCI", u"MATCH XHCI TO UEFI DEVICE", s);
-        goto out;
-    }
-    if (!path_last_pci_bdf(DevicePathFromHandle(xhci_handle),
-                            &xhci_dev, &xhci_fun) ||
+    if (EFI_ERROR(s)) { remember_fail(u"PCI", u"MATCH XHCI TO UEFI DEVICE", s); goto out; }
+    if (!path_last_pci_bdf(DevicePathFromHandle(xhci_handle), &xhci_dev, &xhci_fun) ||
         xhci_dev != d.pci_device || xhci_fun != d.pci_function) {
-        s = EFI_NOT_FOUND;
-        remember_fail(u"PCI", u"BDF ASSOCIATION", s);
-        goto out;
+        s = EFI_NOT_FOUND; remember_fail(u"PCI", u"BDF ASSOCIATION", s); goto out;
     }
 
     s = cfg32(p, 0x10, &bar0);
     if (EFI_ERROR(s) || (bar0 & 1U) || ((bar0 >> 1) & 3U) != 2U) {
-        s = EFI_UNSUPPORTED;
-        remember_fail(u"PCI", u"64-BIT MEMORY BAR", s);
-        goto out;
+        s = EFI_UNSUPPORTED; remember_fail(u"PCI", u"64-BIT MEMORY BAR", s); goto out;
     }
     s = cfg32(p, 0x14, &bar1);
     if (EFI_ERROR(s)) { remember_fail(u"PCI", u"BAR1", s); goto out; }
@@ -742,21 +721,16 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     xhci_rt = rtsoff & ~0x1fU;
     stride = ctx_stride(hcc);
 
-    if (d.port > ports) {
-        s = EFI_NOT_FOUND; remember_fail(u"DISCOVERY", u"PORT RANGE", s); goto out;
-    }
+    if (d.port > ports) { s = EFI_NOT_FOUND; remember_fail(u"DISCOVERY", u"PORT RANGE", s); goto out; }
     s = find_supported_protocol(p, hcc, d.port, &protocol_major, &slot_type);
-    if (EFI_ERROR(s)) {
-        remember_fail(u"DISCOVERY", u"SUPPORTED PROTOCOL", s); goto out;
-    }
+    if (EFI_ERROR(s)) { remember_fail(u"DISCOVERY", u"SUPPORTED PROTOCOL", s); goto out; }
     d.protocol_major = protocol_major;
     if (protocol_major != 2U && protocol_major != 3U) {
         s = EFI_UNSUPPORTED; remember_fail(u"PORT", u"USB PROTOCOL", s); goto out;
     }
 
     Print(u"XHCI=%04x:%04x VERSION=%u.%02u BAR=%08x/%08x OP=%02x RTSOFF=%08x\r\n",
-          id & 0xffffU, id >> 16, ver >> 8, ver & 0xffU,
-          bar0, bar1, op, rtsoff);
+          id & 0xffffU, id >> 16, ver >> 8, ver & 0xffU, bar0, bar1, op, rtsoff);
     Print(u"CAPS: SLOTS=%u PORTS=%u SCRATCHPADS=%u CSZ=%u PAGE=%u DBOFF=%08x SLOT-TYPE=%u\r\n",
           maxslots, ports, scratchpads, stride, page_size, db, slot_type);
     Print(u"UEFI/XHCI ASSOCIATION: BDF=%u:%u PORT=%u PROTOCOL=USB%u\r\n",
@@ -776,9 +750,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     s = reset_xhci(p, op, &cmd, &status);
     if (EFI_ERROR(s)) { remember_fail(u"RESET", u"HCRST/CNR", s); goto out; }
-    if (!(status & STS_HCH)) {
-        s = EFI_DEVICE_ERROR; remember_fail(u"RESET", u"VERIFY HALTED", s); goto out;
-    }
+    if (!(status & STS_HCH)) { s = EFI_DEVICE_ERROR; remember_fail(u"RESET", u"VERIFY HALTED", s); goto out; }
 
     s = dma_alloc(p, 1, &dcbaa_d);
     if (EFI_ERROR(s)) { remember_fail(u"DMA", u"DCBAA", s); goto out; }
@@ -809,7 +781,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     }
 
     init_link_trb(&cmd_d, CMD_TRBS);
-    /* Event rings are consumer rings and have no Link TRB. */
     {
         UINT64 *e = (UINT64 *)erst_d.host;
         e[0] = ev_d.dev;
@@ -848,9 +819,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     s = xhci_port_read(p, op, d.port, &portsc);
     if (EFI_ERROR(s)) { remember_fail(u"PORT", u"PORTSC READ", s); goto out; }
-    if (!(portsc & PORT_CCS)) {
-        s = EFI_NOT_FOUND; remember_fail(u"PORT", u"EXPECTED CONNECTED PORT", s); goto out;
-    }
+    if (!(portsc & PORT_CCS)) { s = EFI_NOT_FOUND; remember_fail(u"PORT", u"EXPECTED CONNECTED PORT", s); goto out; }
     Print(u"PORT BEFORE RESET: RAW=%08x CCS=%u PED=%u PLS=%u SPD=%u CSC=%u PRC=%u WRC=%u\r\n",
           portsc, (portsc & PORT_CCS) ? 1 : 0, (portsc & PORT_PED) ? 1 : 0,
           (portsc & PORT_PLS_MASK) >> 5, (portsc & PORT_SPEED_MASK) >> 10,
@@ -874,36 +843,30 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     if (EFI_ERROR(s)) { remember_fail(u"PORT", u"ASSERT PORT RESET", s); goto out; }
 
     {
-        UINT32 reset_bit = protocol_major == 3U ? PORT_WR : PORT_PR;
-        UINT32 change_bit = protocol_major == 3U ? PORT_WRC : PORT_PRC;
         UINTN loops;
         for (loops = 0; loops < 10000U; ++loops) {
+            UINT32 reset_busy = (protocol_major == 3U) ? (PORT_WR | PORT_PR) : PORT_PR;
+            UINT32 change_done = (protocol_major == 3U) ? (PORT_PRC | PORT_WRC) : PORT_PRC;
             s = xhci_port_read(p, op, d.port, &portsc);
             if (EFI_ERROR(s)) { remember_fail(u"PORT", u"RESET POLL", s); goto out; }
-            if (!(portsc & reset_bit) && (portsc & change_bit)) break;
+            if (!(portsc & reset_busy) && (portsc & change_done) == change_done) break;
             uefi_call_wrapper(BS->Stall, 1, 1000);
         }
-        if (loops == 10000U) {
-            s = EFI_TIMEOUT; remember_fail(u"PORT", u"RESET COMPLETION", s); goto out;
-        }
+        if (loops == 10000U) { s = EFI_TIMEOUT; remember_fail(u"PORT", u"RESET COMPLETION", s); goto out; }
     }
 
-    if (!(portsc & PORT_CCS)) {
-        s = EFI_NOT_FOUND; remember_fail(u"PORT", u"CCS LOST AFTER RESET", s); goto out;
-    }
+    if (!(portsc & PORT_CCS)) { s = EFI_NOT_FOUND; remember_fail(u"PORT", u"CCS LOST AFTER RESET", s); goto out; }
     speed = (UINT8)((portsc & PORT_SPEED_MASK) >> 10);
-    if (!speed) {
-        s = EFI_DEVICE_ERROR; remember_fail(u"PORT", u"SPEED INVALID", s); goto out;
-    }
-    if (protocol_major == 2U && !(portsc & PORT_PED)) {
-        s = EFI_DEVICE_ERROR; remember_fail(u"PORT", u"USB2 PORT NOT ENABLED", s); goto out;
-    }
+    if (!speed || speed > 5U) { s = EFI_DEVICE_ERROR; remember_fail(u"PORT", u"INVALID PORT SPEED", s); goto out; }
+    if (protocol_major == 2U && !(portsc & PORT_PED)) { s = EFI_DEVICE_ERROR; remember_fail(u"PORT", u"USB2 PORT NOT ENABLED", s); goto out; }
 
-    s = port_write(p, op, d.port,
-                   protocol_major == 3U ? PORT_WRC : PORT_PRC);
+    s = port_write(p, op, d.port, protocol_major == 3U ? (PORT_PRC | PORT_WRC) : PORT_PRC);
     if (EFI_ERROR(s)) { remember_fail(u"PORT", u"CLEAR RESET CHANGE", s); goto out; }
     s = xhci_port_read(p, op, d.port, &portsc);
     if (EFI_ERROR(s)) { remember_fail(u"PORT", u"PORTSC AFTER CHANGE CLEAR", s); goto out; }
+    if (portsc & (protocol_major == 3U ? (PORT_PRC | PORT_WRC) : PORT_PRC)) {
+        s = EFI_DEVICE_ERROR; remember_fail(u"PORT", u"RESET CHANGE CLEAR VERIFY", s); goto out;
+    }
 
     {
         UINT32 d0, d1, d2, d3, type, event_port;
@@ -934,8 +897,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
                                 &completion);
     if (EFI_ERROR(s) || completion != CC_SUCCESS) {
         if (!EFI_ERROR(s)) s = EFI_DEVICE_ERROR;
-        remember_fail(u"ENABLE SLOT", u"COMMAND COMPLETION", s);
-        goto out;
+        remember_fail(u"ENABLE SLOT", u"COMMAND COMPLETION", s); goto out;
     }
     Print(u"ENABLE SLOT PASS: SLOT=%u COMPLETION=%u\r\n", slot_id, completion);
 
@@ -947,10 +909,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     if (EFI_ERROR(s)) { remember_fail(u"ADDRESS DEVICE", u"EP0 RING", s); goto out; }
     init_link_trb(&ep0_ring_d, CMD_TRBS);
 
-    s = prepare_input_context(&input_d, &ep0_ring_d, stride, d.port,
-                              speed, ep0_mps);
+    s = prepare_input_context(&input_d, &ep0_ring_d, stride, d.port, speed, ep0_mps);
     if (EFI_ERROR(s)) { remember_fail(u"ADDRESS DEVICE", u"BUILD INPUT CONTEXT", s); goto out; }
-
     ((UINT64 *)dcbaa_d.host)[slot_id] = output_d.dev;
 
     {
@@ -965,11 +925,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             ((slot[0] >> LAST_CTX_SHIFT) & 0x1fU) != 1U ||
             ((slot[1] >> ROOT_HUB_PORT_SHIFT) & 0xffU) != d.port ||
             ((ep0[0] >> EP_TYPE_SHIFT) & 0x7U) != EP_TYPE_CONTROL ||
-            ((ep0[0] >> EP_MPS_SHIFT) & 0xffffU) != ep0_mps ||
+            ((ep0[0] >> EP0_MPS_SHIFT) & 0xffffU) != ep0_mps ||
             (ep_ptr & ~1ULL) != (ep0_ring_d.dev & ~1ULL)) {
-            s = EFI_DEVICE_ERROR;
-            remember_fail(u"ADDRESS DEVICE", u"VERIFY INPUT CONTEXT", s);
-            goto out;
+            s = EFI_DEVICE_ERROR; remember_fail(u"ADDRESS DEVICE", u"VERIFY INPUT CONTEXT", s); goto out;
         }
     }
 
@@ -984,8 +942,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
                                 &completion);
     if (EFI_ERROR(s) || completion != CC_SUCCESS) {
         if (!EFI_ERROR(s)) s = EFI_DEVICE_ERROR;
-        remember_fail(u"ADDRESS DEVICE", u"COMMAND COMPLETION", s);
-        goto out;
+        remember_fail(u"ADDRESS DEVICE", u"COMMAND COMPLETION", s); goto out;
     }
 
     {
@@ -993,9 +950,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         state = out_slot[3];
         if (((state >> SLOT_STATE_SHIFT) & 0x1fU) != SLOT_STATE_ADDRESSED ||
             !(state & 0xffU)) {
-            s = EFI_DEVICE_ERROR;
-            remember_fail(u"ADDRESS DEVICE", u"OUTPUT CONTEXT ADDRESSED", s);
-            goto out;
+            s = EFI_DEVICE_ERROR; remember_fail(u"ADDRESS DEVICE", u"OUTPUT CONTEXT ADDRESSED", s); goto out;
         }
         Print(u"ADDRESS DEVICE PASS: SLOT=%u ADDRESS=%u STATE=ADDRESSED COMPLETION=%u\r\n",
               slot_id, state & 0xffU, completion);
@@ -1010,7 +965,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     s = reset_xhci(p, op, &cmd, &status);
     if (EFI_ERROR(s)) { remember_fail(u"TEARDOWN", u"RESET", s); goto out; }
-
     s = mw64(p, op + 0x18, 0);
     if (EFI_ERROR(s)) { remember_fail(u"TEARDOWN", u"CLEAR CRCR", s); goto out; }
     s = mw64(p, op + 0x30, 0);
@@ -1040,13 +994,13 @@ out:
         dma_free(p, &erst_d);
         dma_free(p, &ev_d);
         dma_free(p, &cmd_d);
-        dma_free(p, &scratch_array_d);
         if (scratch) {
             for (i = 0; i < scratchpads; ++i)
                 dma_free(p, &scratch[i]);
             uefi_call_wrapper(BS->FreePool, 1, scratch);
             scratch = NULL;
         }
+        dma_free(p, &scratch_array_d);
         dma_free(p, &dcbaa_d);
     }
 
