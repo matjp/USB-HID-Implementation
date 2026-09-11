@@ -45,7 +45,6 @@
 
 #define PAGER_DEFAULT_ROWS 25U
 #define PAGER_RESERVED_ROWS 1U
-#define PAGER_MAX_BUFFER 2048U
 
 static UINTN page_rows = PAGER_DEFAULT_ROWS;
 static UINTN page_usable_rows = PAGER_DEFAULT_ROWS - PAGER_RESERVED_ROWS;
@@ -63,7 +62,7 @@ static void pager_init(void)
     UINTN rows = 0;
     EFI_STATUS s;
 
-    if (ST->ConOut && ST->ConOut->QueryMode) {
+    if (ST->ConOut && ST->ConOut->QueryMode && ST->ConOut->Mode) {
         s = uefi_call_wrapper(ST->ConOut->QueryMode, 4,
                               ST->ConOut,
                               ST->ConOut->Mode->Mode,
@@ -84,7 +83,7 @@ static void pager_wait(void)
     EFI_INPUT_KEY key;
     EFI_STATUS s;
 
-    Output(u"PRESS A KEY\r\n");
+    VPrint(u"PRESS A KEY\r\n", (va_list){0});
     for (;;) {
         s = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2, ST->ConIn, &key);
         if (!EFI_ERROR(s)) break;
@@ -106,26 +105,43 @@ static UINTN count_lines(const CHAR16 *text)
 
 static UINTN paged_Print(const CHAR16 *fmt, ...)
 {
-    CHAR16 buffer[PAGER_MAX_BUFFER];
     va_list args;
-    UINTN r, lines;
+    UINTN lines;
+    UINTN r;
 
-    va_start(args, fmt);
-    r = VSPrint(buffer, sizeof(buffer), fmt, args);
-    va_end(args);
-
-    lines = count_lines(buffer);
+    lines = count_lines(fmt);
     if (lines && page_lines && page_lines + lines > page_usable_rows)
         pager_wait();
 
-    Output(buffer);
-    page_lines += lines;
+    va_start(args, fmt);
+    r = VPrint(fmt, args);
+    va_end(args);
+
+    if (ST->ConOut && ST->ConOut->Mode && ST->ConOut->Mode->CursorRow >= 0)
+        page_lines = (UINTN)ST->ConOut->Mode->CursorRow;
+    else
+        page_lines += lines;
+
+    if (page_lines >= page_usable_rows)
+        pager_wait();
+
     return r;
 }
 
 static void pager_finish(void)
 {
-    pager_wait();
+    if (page_lines)
+        pager_wait();
+    else {
+        VPrint(u"PRESS A KEY\r\n", (va_list){0});
+        for (;;) {
+            EFI_INPUT_KEY key;
+            EFI_STATUS s = uefi_call_wrapper(ST->ConIn->ReadKeyStroke, 2,
+                                             ST->ConIn, &key);
+            if (!EFI_ERROR(s)) break;
+            uefi_call_wrapper(BS->Stall, 1, 10000);
+        }
+    }
 }
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
