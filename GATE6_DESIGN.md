@@ -21,11 +21,13 @@ Therefore `UEFI authority` does not mean `reuse UEFI slot/ring/context/address s
 
 Prove the first live-device xHCI sequence for exactly one pre-connected wired HID keyboard on the Toshiba Satellite P50:
 
-`UEFI-selected keyboard -> fresh controller initialization -> root-port reset -> Enable Slot -> fresh device context -> Address Device -> clean teardown`
+`UEFI-selected keyboard -> fresh controller initialization -> USB2/low-speed HID port reset -> Enable Slot -> fresh device context -> Address Device -> clean teardown`
 
 The first implementation stops immediately after successful Address Device completion and validation.
 
 No keyboard report transfer is attempted by this gate.
+
+Gate 6 is deliberately scoped to a directly attached HID keyboard that enumerates on the controller's USB2-compatible path at Low Speed or Full Speed. SuperSpeed device operation and USB3-specific reset handling are outside this gate. A keyboard being physically plugged into a modern USB3-capable connector does not by itself make the device a SuperSpeed device; the live xHCI port state determines the protocol/speed path used for this test.
 
 ## 3. Fixed precondition
 
@@ -128,6 +130,8 @@ The implementation must confirm the controller meets the project compatibility b
 
 Where the UEFI handoff already supplies controller identity/capability facts, those values are consumed as useful discovery state. Live xHCI register state remains independently read and controlled by V32 because V32 is establishing fresh ownership of the controller programming state.
 
+The handoff should identify the PCI controller path associated with the selected USB device sufficiently to bind the bridge to the corresponding xHCI controller. The bridge may discover xHCI controllers through PCI, but it must not simply select the first matching xHCI controller when the handoff identifies another controller.
+
 ## 7. Cumulative controller sequence
 
 V32 must carry forward the proven V29, V30 and V31 machinery rather than creating a replacement implementation.
@@ -144,7 +148,7 @@ V32 must carry forward the proven V29, V30 and V31 machinery rather than creatin
 
 ### Phase B — Controller preparation
 
-8. Discover the corresponding xHCI controller through PCI class.
+8. Discover the corresponding xHCI controller through PCI class/path binding.
 9. Read/validate HCIVERSION and required capabilities.
 10. Halt the controller if necessary.
 11. Reset the controller.
@@ -160,58 +164,60 @@ V32 must carry forward the proven V29, V30 and V31 machinery rather than creatin
 18. Select the root port from the bridge-local copy of the UEFI handoff's selected keyboard record.
 19. Read that port's PORTSC state.
 20. Verify the port is currently connected before attempting reset.
-21. Do not scan all ports to locate a different connected device.
+21. Determine the live port protocol/speed from xHCI state. Gate 6 accepts Low Speed or Full Speed only; reject a selected keyboard whose live speed is High Speed or SuperSpeed rather than adding a USB3/general-speed path to this gate.
+22. Do not scan all ports to locate a different connected device.
 
 ### Phase D — Port reset
 
-22. Perform the xHCI root-port reset appropriate to the port's reported USB protocol/speed path.
-23. Preserve unrelated PORTSC state and modify only explicitly required operation/change bits.
-24. Poll for the protocol-appropriate reset completion/change indication.
-25. Consume and validate the resulting Port Status Change Event through the same polled primary event-ring mechanism used by V31.
-26. Re-read PORTSC and validate the expected post-reset state.
-27. If the expected device connection is no longer present, fail; do not select another port.
+23. Perform the USB2-compatible root-port reset required for the selected Low-/Full-Speed device.
+24. Preserve unrelated PORTSC state and modify only explicitly required operation/change bits.
+25. Poll for the reset completion/change indication required for the USB2 path.
+26. Consume and validate the resulting Port Status Change Event through the same polled primary event-ring mechanism used by V31.
+27. Re-read PORTSC and validate the expected post-reset state.
+28. If the expected device connection is no longer present, fail; do not select another port.
+29. Use the live post-reset PORTSC speed value, not the pre-reset UEFI speed field, as the authoritative Speed input for the Slot Context. The UEFI speed remains a discovery/evidence value.
 
 ### Phase E — Enable Slot
 
-28. Obtain the controller-declared slot/protocol information needed by the Enable Slot command.
-29. Issue exactly one Enable Slot command.
-30. Ring only Doorbell 0.
-31. Poll the primary event ring.
-32. Require exactly one matching Command Completion Event with Success completion code.
-33. Record the returned Slot ID.
-34. The Slot ID is fresh per V32 run and is never inherited from UEFI or V31.
+30. Obtain the controller-declared slot/protocol information needed by the Enable Slot command.
+31. Issue exactly one Enable Slot command.
+32. Ring only Doorbell 0.
+33. Poll the primary event ring.
+34. Require exactly one matching Command Completion Event with Success completion code.
+35. Record the returned Slot ID.
+36. The Slot ID is fresh per V32 run and is never inherited from UEFI or V31.
 
 ### Phase F — Fresh device context
 
-35. Determine context size from the controller capability.
-36. Allocate the required Input Device Context, Output Device Context, and EP0 transfer ring through the existing DMA abstraction.
-37. Initialize them from zeroed memory with the correct alignment and context stride.
-38. Create the DCBAA slot entry using the fresh Output Device Context device-visible address.
-39. Initialize only the Slot Context and EP0 Input Context fields required for Address Device.
-40. Use the selected keyboard handoff's root port and speed as the inputs to the Slot Context.
-41. Use the normalized UEFI-supplied EP0 packet-size information.
-42. Initialize EP0 transfer-ring dequeue state and cycle state correctly.
+37. Determine context size from the controller capability.
+38. Allocate the required Input Device Context, Output Device Context, and EP0 transfer ring through the existing DMA abstraction.
+39. Initialize them from zeroed memory with the correct alignment and context stride.
+40. Create the DCBAA slot entry using the fresh Output Device Context device-visible address.
+41. Initialize only the Slot Context and EP0 Input Context fields required for Address Device.
+42. Use the selected keyboard handoff's root port together with the live post-reset port speed in the Slot Context.
+43. Use the normalized UEFI-supplied EP0 packet-size information.
+44. Initialize EP0 transfer-ring dequeue state and cycle state correctly.
 
 ### Phase G — Address Device
 
-43. Build exactly one Address Device command for the newly returned Slot ID.
-44. Point it to the fresh Input Device Context.
-45. Ring the command doorbell.
-46. Poll the primary event ring for the corresponding Command Completion Event.
-47. Validate the completion event type, completion code, slot ID, and command TRB pointer.
-48. Validate the resulting Output Slot Context state required for the addressed/default state.
-49. Do not issue descriptors, SET_CONFIGURATION, Configure Endpoint, HID Set Protocol, or interrupt-IN transfers in this gate.
+45. Build exactly one Address Device command for the newly returned Slot ID.
+46. Point it to the fresh Input Device Context.
+47. Ring the command doorbell.
+48. Poll the primary event ring for the corresponding Command Completion Event.
+49. Validate the completion event type, completion code, slot ID, and command TRB pointer.
+50. Validate the resulting Output Slot Context state required for the addressed/default state.
+51. Do not issue descriptors, SET_CONFIGURATION, Configure Endpoint, HID Set Protocol, or interrupt-IN transfers in this gate.
 
 ### Phase H — Safe recovery and teardown
 
-50. Halt the controller and confirm `HCH=1`.
-51. Reset the controller and confirm `CNR=0` and halted state as required by the existing recovery path.
-52. Clear CRCR, DCBAAP, CONFIG, event-ring/interrupter references, and any other controller pointers established by V29–V32.
-53. Only after controller references have been eliminated, unmap and free all DMA mappings.
-54. Free all ordinary Boot Services allocations.
-55. Return success only after the complete teardown succeeds.
+52. Halt the controller and confirm `HCH=1`.
+53. Reset the controller and confirm `CNR=0` and halted state as required by the existing recovery path.
+54. Clear CRCR, DCBAAP, CONFIG, event-ring/interrupter references, and any other controller pointers established by V29–V32.
+55. Only after controller references have been eliminated, unmap and free all DMA mappings.
+56. Free all ordinary Boot Services allocations.
+57. Return success only after the complete teardown succeeds.
 
-If the controller is active after a command/transfer and cannot be confirmed halted, V32 must not free controller-referenced memory. It must enter the project's existing non-returning fatal recovery path or an equally conservative state.
+If the controller is active after a command/transfer and cannot be confirmed halted, V32 must not free controller-referenced memory. It must enter the project's existing non-returning fatal recovery path or an equally conservative recovery path.
 
 ## 8. What “use as much UEFI information as possible” means
 
@@ -221,9 +227,11 @@ For the selected keyboard, V32 should use all useful facts already supplied by U
 
 V32 must not treat those facts as permission to skip the xHCI state machine. In particular, UEFI's prior configured state does not substitute for V32's own Enable Slot, Device Context, Address Device, or later Configure Endpoint operations.
 
+For Gate 6 specifically, the UEFI speed is an expectation/evidence field; the live post-reset PORTSC speed is authoritative for xHCI context construction. The gate remains deliberately limited to Low-/Full-Speed HID and does not implement SuperSpeed reset/state handling.
+
 The correct pattern is therefore:
 
-`UEFI discovery -> bounded handoff -> bridge-local copy -> fresh xHCI state -> use selected root port -> normal xHCI device lifecycle`
+`UEFI discovery -> bounded handoff -> bridge-local copy -> fresh xHCI state -> use selected root port -> determine live USB2 speed -> normal xHCI device lifecycle`
 
 not:
 
@@ -233,6 +241,8 @@ not:
 
 The following are not part of the first V32 implementation:
 
+- High-Speed or SuperSpeed keyboard operation;
+- USB3-specific reset/warm-reset handling;
 - mouse traffic;
 - hubs;
 - hot-plug/disconnect state machines;
@@ -255,7 +265,9 @@ A successful V32 run must make the following observable without relying on hard-
 - The selected keyboard's UEFI facts were copied into bridge-local state and consumed directly.
 - No bridge-side keyboard-discovery scan was used.
 - The selected root port was connected.
-- Port reset completed and its resulting port-status change was consumed/validated.
+- The live port speed was Low Speed or Full Speed.
+- Port reset completed using the USB2-compatible path and its resulting port-status change was consumed/validated.
+- The post-reset live PORTSC speed was used for Slot Context construction.
 - Enable Slot returned a fresh Slot ID.
 - Fresh device contexts were allocated and linked through the DCBAA.
 - Address Device completed successfully for that Slot ID.
@@ -271,7 +283,7 @@ Before any V32 source is written, the implementation design must be checked agai
 
 1. the complete project documentation;
 2. the applicable UEFI specification sections for USB I/O, device paths, PCI I/O and DMA mapping;
-3. the applicable xHCI specification sections for controller reset, ports, command ring, event ring, Enable Slot, device contexts and Address Device;
+3. the applicable xHCI specification sections for controller reset, USB2 ports, command ring, event ring, Enable Slot, device contexts and Address Device;
 4. Linux xhci-hcd as an implementation cross-check;
 5. coreboot/libpayload xHCI code as an implementation cross-check;
 6. the proven V29/V30/V31 source and observed hardware results.
@@ -280,10 +292,10 @@ The review must explicitly prove that:
 
 - the UEFI discovery producer and V32 bridge consumer are separate logical stages;
 - the bridge consumes the selected keyboard rather than rediscovering it;
+- the bridge uses the live post-reset port speed rather than trusting the pre-reset UEFI speed for xHCI context construction;
 - EP0 packet-size data is normalized before xHCI context construction;
 - V32 preserves the cumulative implementation and safety/teardown gates;
-- no UEFI-owned xHCI runtime state is reused.
-
-The external references support this separation: UEFI defines `EFI_USB_IO_PROTOCOL` as a boot-services USB device access interface and describes the UEFI USB bus driver as performing USB enumeration; UEFI also defines device-path USB nodes carrying parent-port/interface information. The xHCI specification defines the Device Context/Slot initialization used by Address Device, including root-port and speed information. citeturn350803search1turn350803search3turn350803search34
+- no UEFI-owned xHCI runtime state is reused;
+- no USB3-specific implementation is introduced into this low/full-speed keyboard gate.
 
 No CI build or Toshiba hardware test is authorized until that implementation review passes.
