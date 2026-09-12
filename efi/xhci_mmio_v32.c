@@ -1,38 +1,67 @@
-/* Version 32 — cumulative Gate 6 implementation */
-
-#define efi_main v31_unused_efi_main
+/*
+ * Version 32 — clean Gate 6 implementation.
+ *
+ * V31 is included only as the proven low-level xHCI/DMA primitive layer.
+ * V32 owns the complete Gate 6 state machine and handoff contract; it does
+ * not inherit V32 state from the previous implementation.
+ */
+#define efi_main v31_reference_entry
 #include "xhci_mmio_v31.c"
 #undef efi_main
 
 #include "usb_io_compat.h"
 
-#define V32_TRB_ADDRESS_DEVICE      11U
-#define V32_TRB_PORT_STATUS_CHANGE  34U
-#define V32_TRB_COMMAND_COMPLETION  33U
-#define V32_PORTSC_CCS              0x00000001U
-#define V32_PORTSC_PED              0x00000002U
-#define V32_PORTSC_PR               0x00000010U
-#define V32_PORTSC_PLS_MASK         0x000001e0U
-#define V32_PORTSC_PRC              0x00200000U
-#define V32_PORTSC_SPEED_MASK       0x00003c00U
-#define V32_PORTSC_SPEED_SHIFT      10U
-#define V32_PORTSC_PIC_MASK         0x0000c000U
-#define V32_PORTSC_LWS              0x00010000U
-#define V32_PORTSC_PP               0x00000200U
-#define V32_PORTSC_WCE              0x02000000U
-#define V32_PORTSC_WDE              0x04000000U
-#define V32_PORTSC_WOE              0x08000000U
-#define V32_PORTSC_RW_MASK          (V32_PORTSC_PED | V32_PORTSC_PR | \
-                                     V32_PORTSC_PLS_MASK | V32_PORTSC_PP | \
-                                     V32_PORTSC_PIC_MASK | V32_PORTSC_LWS | \
-                                     V32_PORTSC_WCE | V32_PORTSC_WDE | V32_PORTSC_WOE)
-#define V32_USB_SPEED_FULL          1U
-#define V32_USB_SPEED_LOW           2U
-#define V32_HANDOFF_MAGIC           0x48494458U
-#define V32_HANDOFF_VERSION         2U
-#define V32_MAX_ENDPOINTS           8U
-#define V32_MAX_PATH_BYTES          512U
+#define V32_HANDOFF_MAGIC       0x48494458U
+#define V32_HANDOFF_VERSION     2U
+#define V32_MAX_PATH_BYTES      512U
+#define V32_MAX_ENDPOINTS       8U
 
+#define V32_TRB_ENABLE_SLOT     9U
+#define V32_TRB_ADDRESS_DEVICE  11U
+#define V32_TRB_PORT_STATUS     34U
+#define V32_TRB_COMMAND_EVENT   33U
+
+#define V32_STS_HCH             0x00000001U
+#define V32_STS_CNR             0x00000800U
+#define V32_CMD_RUN             0x00000001U
+#define V32_CMD_RESET           0x00000002U
+#define V32_CMD_INTE            0x00000004U
+#define V32_CMD_HSEE            0x00000008U
+#define V32_HCC_AC64            0x00000001U
+#define V32_HCC_CTXSZ           0x00000004U
+#define V32_IMAN_IP             0x00000001U
+#define V32_PORT_CCS            0x00000001U
+#define V32_PORT_PED            0x00000002U
+#define V32_PORT_PR             0x00000010U
+#define V32_PORT_PLS_MASK       0x000001e0U
+#define V32_PORT_SPEED_MASK     0x00003c00U
+#define V32_PORT_SPEED_SHIFT    10U
+#define V32_PORT_PRC            0x00200000U
+#define V32_PORT_RW_FIELDS      (V32_PORT_PED | V32_PORT_PR | V32_PORT_PLS_MASK | \
+                                 0x00000200U | 0x0000c000U | 0x00010000U | \
+                                 0x02000000U | 0x04000000U | 0x08000000U)
+#define V32_PORT_RO_FIELDS      (V32_PORT_CCS | 0x00000008U | V32_PORT_SPEED_MASK | 0x40000000U)
+#define V32_PORT_PLS_U0         0U
+#define V32_USB_SPEED_FULL      1U
+#define V32_USB_SPEED_LOW       2U
+#define V32_EVENT_TRBS          16U
+#define V32_COMMAND_TRBS        256U
+#define V32_CC_SUCCESS          1U
+#define V32_CTX_SLOT_ADD        0x00000001U
+#define V32_CTX_EP0_ADD         0x00000002U
+#define V32_EP_TYPE_CONTROL     4U
+#define V32_SLOT_STATE_ADDRESSED 2U
+#define V32_IMAN_OFF            0x20U
+#define V32_ERSTSZ_OFF          0x28U
+#define V32_ERSTBA_OFF          0x30U
+#define V32_ERDP_OFF            0x38U
+#define V32_PORTSC_BASE         0x400U
+#define V32_CONFIG_OFF          0x38U
+#define V32_DCBAAP_OFF          0x30U
+#define V32_CRCR_OFF            0x18U
+#define V32_DB0_OFF             0U
+
+/* The handoff remains a value object. The bridge never keeps EFI_USB_IO state. */
 typedef struct {
     UINT8  endpoint_address;
     UINT8  attributes;
@@ -47,7 +76,7 @@ typedef struct {
 } V32_DEVICE_PATH;
 
 typedef struct {
-    UINT8  kind;
+    UINT8  kind;                 /* 1 keyboard, 2 mouse */
     UINT8  root_port;
     UINT8  speed;
     UINT8  configuration_value;
@@ -67,8 +96,6 @@ typedef struct {
     V32_DEVICE_PATH device_path;
 } V32_HID_DEVICE;
 
-typedef V32_HID_DEVICE V32_KEYBOARD;
-
 typedef struct {
     UINT32 magic;
     UINT16 version;
@@ -86,29 +113,101 @@ typedef struct {
     V32_HID_DEVICE mouse;
 } V32_HANDOFF;
 
-static EFI_GUID V32_UsbIoGuid = EFI_USB_IO_PROTOCOL_GUID;
+static EFI_GUID v32_usb_io_guid = EFI_USB_IO_PROTOCOL_GUID;
 
 static void v32_fail(const CHAR16 *stage, const CHAR16 *op, EFI_STATUS s)
 {
     fail(stage, op, s);
 }
 
-static UINT64 v32_disable_cpu_interrupts(void)
+static UINT64 v32_disable_interrupts(void)
 {
     UINT64 flags;
     __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
     return flags;
 }
 
-static void v32_restore_cpu_interrupts(UINT64 flags)
+static void v32_restore_interrupts(UINT64 flags)
 {
     if (flags & (1ULL << 9))
         __asm__ __volatile__("sti" ::: "memory");
 }
 
+static UINT16 v32_path_len(const EFI_DEVICE_PATH_PROTOCOL *p)
+{
+    return (UINT16)p->Length[0] | ((UINT16)p->Length[1] << 8);
+}
+
+static EFI_STATUS v32_path_size(EFI_DEVICE_PATH_PROTOCOL *path, UINTN *size)
+{
+    UINT8 *p = (UINT8 *)path;
+    UINTN total = 0;
+    if (!p || !size)
+        return EFI_INVALID_PARAMETER;
+    while (total + sizeof(EFI_DEVICE_PATH_PROTOCOL) <= V32_MAX_PATH_BYTES) {
+        EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
+        UINT16 len = v32_path_len(h);
+        if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL) ||
+            total + len > V32_MAX_PATH_BYTES)
+            return EFI_DEVICE_ERROR;
+        total += len;
+        if (h->Type == 0x7fU) {
+            *size = total;
+            return EFI_SUCCESS;
+        }
+        p += len;
+    }
+    return EFI_BAD_BUFFER_SIZE;
+}
+
+static EFI_STATUS v32_copy_path(V32_DEVICE_PATH *dst, EFI_DEVICE_PATH_PROTOCOL *src)
+{
+    UINTN size;
+    EFI_STATUS s;
+    if (!dst || !src)
+        return EFI_INVALID_PARAMETER;
+    s = v32_path_size(src, &size);
+    if (EFI_ERROR(s))
+        return s;
+    uefi_call_wrapper(BS->SetMem, 3, dst, sizeof(*dst), 0);
+    CopyMem(dst->data, src, size);
+    dst->size = (UINT16)size;
+    return EFI_SUCCESS;
+}
+
+static BOOLEAN v32_path_equal(const V32_DEVICE_PATH *expected,
+                              EFI_DEVICE_PATH_PROTOCOL *actual)
+{
+    UINTN size;
+    if (!expected || !actual || !expected->size ||
+        expected->size > V32_MAX_PATH_BYTES)
+        return FALSE;
+    if (EFI_ERROR(v32_path_size(actual, &size)) || size != expected->size)
+        return FALSE;
+    return CompareMem(expected->data, actual, size) == 0;
+}
+
+static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path)
+{
+    UINT8 *p = (UINT8 *)path;
+    UINT8 root = 0xffU;
+    while (p) {
+        EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
+        UINT16 len = v32_path_len(h);
+        if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL) || h->Type == 0x7fU)
+            break;
+        /* Messaging / USB node: Type 0x03, SubType 0x05, Port at byte 4. */
+        if (h->Type == 0x03U && h->SubType == 0x05U && len >= 6U)
+            root = p[4];
+        p += len;
+    }
+    return root;
+}
+
 static BOOLEAN v32_is_hid(const EFI_USB_INTERFACE_DESCRIPTOR *d, UINT8 *kind)
 {
-    if (d->InterfaceClass != 0x03U || d->InterfaceSubClass != 0x01U)
+    if (!d || !kind || d->InterfaceClass != 0x03U ||
+        d->InterfaceSubClass != 0x01U)
         return FALSE;
     if (d->InterfaceProtocol == 0x01U) {
         *kind = 1U;
@@ -121,79 +220,20 @@ static BOOLEAN v32_is_hid(const EFI_USB_INTERFACE_DESCRIPTOR *d, UINT8 *kind)
     return FALSE;
 }
 
-static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path)
+static BOOLEAN v32_pci_prefix(EFI_DEVICE_PATH_PROTOCOL *pci,
+                              EFI_DEVICE_PATH_PROTOCOL *usb,
+                              UINTN *matched)
 {
-    UINT8 *p = (UINT8 *)path;
-    UINT8 root = 0xffU;
-    while (p) {
-        EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
-        UINT16 len = (UINT16)h->Length[0] | ((UINT16)h->Length[1] << 8);
-        if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL) || h->Type == 0x7fU)
-            break;
-        if (h->Type == 0x03U && h->SubType == 0x05U && len >= 6U)
-            root = p[4];
-        p += len;
-    }
-    return root;
-}
-
-static EFI_STATUS v32_path_size(EFI_DEVICE_PATH_PROTOCOL *path, UINTN *size)
-{
-    UINT8 *p = (UINT8 *)path;
+    UINT8 *p = (UINT8 *)pci;
+    UINT8 *q = (UINT8 *)usb;
     UINTN total = 0;
-    if (!path || !size) return EFI_INVALID_PARAMETER;
-    while (total <= V32_MAX_PATH_BYTES - sizeof(EFI_DEVICE_PATH_PROTOCOL)) {
-        EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
-        UINT16 len = (UINT16)h->Length[0] | ((UINT16)h->Length[1] << 8);
-        if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL)) return EFI_DEVICE_ERROR;
-        if (total + len > V32_MAX_PATH_BYTES) return EFI_BAD_BUFFER_SIZE;
-        total += len;
-        if (h->Type == 0x7fU) {
-            *size = total;
-            return EFI_SUCCESS;
-        }
-        p += len;
-    }
-    return EFI_BAD_BUFFER_SIZE;
-}
-
-static EFI_STATUS v32_copy_path(V32_DEVICE_PATH *dst, EFI_DEVICE_PATH_PROTOCOL *path)
-{
-    UINTN size = 0;
-    EFI_STATUS s;
-    if (!dst || !path) return EFI_INVALID_PARAMETER;
-    s = v32_path_size(path, &size);
-    if (EFI_ERROR(s)) return s;
-    uefi_call_wrapper(BS->SetMem, 3, dst, sizeof(*dst), 0);
-    CopyMem(dst->data, path, size);
-    dst->size = (UINT16)size;
-    return EFI_SUCCESS;
-}
-
-static BOOLEAN v32_path_equals(const V32_DEVICE_PATH *expected,
-                               EFI_DEVICE_PATH_PROTOCOL *actual)
-{
-    UINTN size = 0;
-    if (!expected || !expected->size || expected->size > V32_MAX_PATH_BYTES || !actual)
+    if (!p || !q)
         return FALSE;
-    if (EFI_ERROR(v32_path_size(actual, &size)) || size != expected->size)
-        return FALSE;
-    return CompareMem(expected->data, actual, size) == 0;
-}
-
-static BOOLEAN v32_pci_path_prefix(EFI_DEVICE_PATH_PROTOCOL *pci_path,
-                                   EFI_DEVICE_PATH_PROTOCOL *usb_path,
-                                   UINTN *matched)
-{
-    UINT8 *p = (UINT8 *)pci_path;
-    UINT8 *q = (UINT8 *)usb_path;
-    UINTN total = 0;
-    if (!p || !q) return FALSE;
     for (;;) {
         EFI_DEVICE_PATH_PROTOCOL *a = (EFI_DEVICE_PATH_PROTOCOL *)p;
         EFI_DEVICE_PATH_PROTOCOL *b = (EFI_DEVICE_PATH_PROTOCOL *)q;
-        UINT16 alen = (UINT16)a->Length[0] | ((UINT16)a->Length[1] << 8);
-        UINT16 blen = (UINT16)b->Length[0] | ((UINT16)b->Length[1] << 8);
+        UINT16 alen = v32_path_len(a);
+        UINT16 blen = v32_path_len(b);
         if (alen < sizeof(EFI_DEVICE_PATH_PROTOCOL) ||
             blen < sizeof(EFI_DEVICE_PATH_PROTOCOL))
             return FALSE;
@@ -209,129 +249,85 @@ static BOOLEAN v32_pci_path_prefix(EFI_DEVICE_PATH_PROTOCOL *pci_path,
     }
 }
 
-/* UEFI discovery producer: identify the PCI controller whose complete device
- * path is the longest prefix of the selected USB interface path. */
-static EFI_STATUS v32_find_controller(EFI_DEVICE_PATH_PROTOCOL *usb_path,
-                                       EFI_HANDLE *controller)
+static EFI_STATUS v32_controller_for_path(EFI_DEVICE_PATH_PROTOCOL *usb_path,
+                                          EFI_HANDLE *controller)
 {
-    EFI_HANDLE *pci_handles = NULL;
-    UINTN pci_count = 0, i, best_len = 0;
+    EFI_HANDLE *handles = NULL;
+    UINTN count = 0, i, best_len = 0;
     EFI_HANDLE best = NULL;
     EFI_STATUS s;
 
-    if (!usb_path || !controller) return EFI_INVALID_PARAMETER;
-    s = LibLocateHandle(ByProtocol, &PciGuid, NULL, &pci_count, &pci_handles);
+    s = LibLocateHandle(ByProtocol, &PciGuid, NULL, &count, &handles);
     if (EFI_ERROR(s)) return s;
-
-    for (i = 0; i < pci_count; ++i) {
+    for (i = 0; i < count; ++i) {
         EFI_DEVICE_PATH_PROTOCOL *pci_path = NULL;
         UINTN matched = 0;
-        s = uefi_call_wrapper(BS->OpenProtocol, 6, pci_handles[i],
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, handles[i],
                               &DevicePathProtocol, (VOID **)&pci_path,
                               NULL, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-        if (EFI_ERROR(s) || !pci_path) continue;
-        if (v32_pci_path_prefix(pci_path, usb_path, &matched) && matched > best_len) {
+        if (EFI_ERROR(s) || !pci_path)
+            continue;
+        if (v32_pci_prefix(pci_path, usb_path, &matched) && matched > best_len) {
             best_len = matched;
-            best = pci_handles[i];
+            best = handles[i];
         }
     }
-    FreePool(pci_handles);
+    FreePool(handles);
     if (!best) return EFI_NOT_FOUND;
     *controller = best;
     return EFI_SUCCESS;
 }
 
-static EFI_STATUS v32_validate_controller_path(EFI_HANDLE controller,
-                                               const V32_DEVICE_PATH *expected)
-{
-    EFI_DEVICE_PATH_PROTOCOL *actual = NULL;
-    EFI_STATUS s;
-    s = uefi_call_wrapper(BS->OpenProtocol, 6, controller,
-                          &DevicePathProtocol, (VOID **)&actual,
-                          NULL, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-    if (EFI_ERROR(s)) return s;
-    return v32_path_equals(expected, actual) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
-}
-
-static EFI_STATUS v32_pci_match(EFI_HANDLE controller,
-                                UINT16 segment, UINT8 bus,
-                                UINT8 device, UINT8 function,
-                                UINT16 vendor, UINT16 device_id,
-                                EFI_PCI_IO_PROTOCOL **out)
-{
-    EFI_PCI_IO_PROTOCOL *p = NULL;
-    UINTN sg = 0, b = 0, d = 0, f = 0;
-    UINT32 id = 0, cls = 0;
-    EFI_STATUS s;
-    s = uefi_call_wrapper(BS->OpenProtocol, 6, controller, &PciGuid,
-                          (VOID **)&p, NULL, NULL,
-                          EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-    if (EFI_ERROR(s)) return s;
-    s = uefi_call_wrapper(p->GetLocation, 5, p, &sg, &b, &d, &f);
-    if (EFI_ERROR(s) || sg != segment || b != bus || d != device || f != function)
-        return EFI_DEVICE_ERROR;
-    s = cfg32(p, 0x00, &id);
-    if (EFI_ERROR(s) || (UINT16)(id & 0xffffU) != vendor ||
-        (UINT16)(id >> 16) != device_id)
-        return EFI_DEVICE_ERROR;
-    s = cfg32(p, 0x08, &cls);
-    if (EFI_ERROR(s) || ((cls >> 24) & 0xffU) != 0x0cU ||
-        ((cls >> 16) & 0xffU) != 0x03U ||
-        ((cls >> 8) & 0xffU) != 0x30U)
-        return EFI_UNSUPPORTED;
-    *out = p;
-    return EFI_SUCCESS;
-}
-
-static EFI_STATUS v32_fill_hid(EFI_USB_IO_PROTOCOL *usb,
-                               EFI_USB_INTERFACE_DESCRIPTOR *iface,
-                               EFI_DEVICE_PATH_PROTOCOL *path,
-                               UINT8 kind, V32_HID_DEVICE *d)
+static EFI_STATUS v32_fill_device(EFI_USB_IO_PROTOCOL *usb,
+                                  EFI_USB_INTERFACE_DESCRIPTOR *iface,
+                                  EFI_DEVICE_PATH_PROTOCOL *path,
+                                  UINT8 kind, V32_HID_DEVICE *out)
 {
     EFI_USB_DEVICE_DESCRIPTOR dd;
     EFI_USB_CONFIG_DESCRIPTOR cd;
     EFI_USB_ENDPOINT_DESCRIPTOR ep;
-    UINTN e, eps;
+    UINTN i, n;
     BOOLEAN got_in = FALSE;
     EFI_STATUS s;
 
-    uefi_call_wrapper(BS->SetMem, 3, d, sizeof(*d), 0);
-    d->kind = kind;
-    d->root_port = v32_root_port(path);
-    if (d->root_port == 0xffU) return EFI_NOT_FOUND;
-    d->interface_number = iface->InterfaceNumber;
-    d->interface_protocol = iface->InterfaceProtocol;
-    d->endpoint_count = iface->NumEndpoints;
-    if (d->endpoint_count > V32_MAX_ENDPOINTS)
-        d->endpoint_count = V32_MAX_ENDPOINTS;
-    s = v32_copy_path(&d->device_path, path);
+    uefi_call_wrapper(BS->SetMem, 3, out, sizeof(*out), 0);
+    out->kind = kind;
+    out->root_port = v32_root_port(path);
+    if (out->root_port == 0xffU)
+        return EFI_NOT_FOUND;
+    out->interface_number = iface->InterfaceNumber;
+    out->interface_protocol = iface->InterfaceProtocol;
+    out->endpoint_count = iface->NumEndpoints;
+    if (out->endpoint_count > V32_MAX_ENDPOINTS)
+        out->endpoint_count = V32_MAX_ENDPOINTS;
+    s = v32_copy_path(&out->device_path, path);
     if (EFI_ERROR(s)) return s;
 
     if (!EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 3, usb, &dd))) {
-        d->vendor_id = dd.IdVendor;
-        d->product_id = dd.IdProduct;
-        d->bcd_usb = dd.BcdUSB;
-        d->ep0_mps_descriptor = dd.MaxPacketSize0;
+        out->vendor_id = dd.IdVendor;
+        out->product_id = dd.IdProduct;
+        out->bcd_usb = dd.BcdUSB;
+        out->ep0_mps_descriptor = dd.MaxPacketSize0;
     }
     if (!EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 3, usb, &cd)))
-        d->configuration_value = cd.ConfigurationValue;
+        out->configuration_value = cd.ConfigurationValue;
 
-    eps = d->endpoint_count;
-    for (e = 0; e < eps; ++e) {
+    n = out->endpoint_count;
+    for (i = 0; i < n; ++i) {
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetEndpointDescriptor, 4,
-                                         usb, (UINT8)e, &ep)))
+                                         usb, (UINT8)i, &ep)))
             continue;
-        d->endpoints[e].endpoint_address = ep.EndpointAddress;
-        d->endpoints[e].attributes = ep.Attributes;
-        d->endpoints[e].max_packet_size = ep.MaxPacketSize;
-        d->endpoints[e].interval = ep.Interval;
+        out->endpoints[i].endpoint_address = ep.EndpointAddress;
+        out->endpoints[i].attributes = ep.Attributes;
+        out->endpoints[i].max_packet_size = ep.MaxPacketSize;
+        out->endpoints[i].interval = ep.Interval;
         if (!got_in && ep.DescriptorType == 0x05U && ep.Length >= 7U &&
             (ep.EndpointAddress & 0x80U) &&
             (ep.Attributes & 0x03U) == 0x03U &&
             ep.MaxPacketSize != 0U && ep.Interval != 0U) {
-            d->interrupt_in_endpoint = ep.EndpointAddress;
-            d->interrupt_max_packet_size = ep.MaxPacketSize;
-            d->interval = ep.Interval;
+            out->interrupt_in_endpoint = ep.EndpointAddress;
+            out->interrupt_max_packet_size = ep.MaxPacketSize;
+            out->interval = ep.Interval;
             got_in = TRUE;
         }
     }
@@ -341,10 +337,18 @@ static EFI_STATUS v32_fill_hid(EFI_USB_IO_PROTOCOL *usb,
 static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
                                       EFI_HANDLE *controller)
 {
-    EFI_HANDLE *usb_handles = NULL;
-    UINTN count = 0, i, keyboards = 0, mice = 0;
-    EFI_STATUS s = LibLocateHandle(ByProtocol, &V32_UsbIoGuid, NULL,
-                                   &count, &usb_handles);
+    EFI_HANDLE *handles = NULL;
+    UINTN count = 0, i;
+    UINTN keyboards = 0, mice = 0;
+    EFI_STATUS s;
+    EFI_HANDLE selected_controller = NULL;
+
+    uefi_call_wrapper(BS->SetMem, 3, h, sizeof(*h), 0);
+    h->magic = V32_HANDOFF_MAGIC;
+    h->version = V32_HANDOFF_VERSION;
+    h->size = (UINT16)sizeof(*h);
+
+    s = LibLocateHandle(ByProtocol, &v32_usb_io_guid, NULL, &count, &handles);
     if (EFI_ERROR(s)) return EFI_NOT_FOUND;
 
     for (i = 0; i < count; ++i) {
@@ -354,619 +358,710 @@ static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
         EFI_HANDLE ch = NULL;
         UINT8 kind;
 
-        if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, usb_handles[i],
-                                         &V32_UsbIoGuid, (VOID **)&usb,
-                                         image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
-            continue;
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, handles[i],
+                              &v32_usb_io_guid, (VOID **)&usb,
+                              image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(s)) continue;
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetInterfaceDescriptor, 3,
-                                         usb, &iface)) || !v32_is_hid(&iface, &kind))
+                                         usb, &iface)) ||
+            !v32_is_hid(&iface, &kind))
             continue;
-
-        s = uefi_call_wrapper(BS->OpenProtocol, 6, usb_handles[i],
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, handles[i],
                               &DevicePathProtocol, (VOID **)&path,
                               image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
         if (EFI_ERROR(s) || !path) {
-            v32_fail(u"DISCOVERY", u"DEVICE PATH", s);
-            FreePool(usb_handles);
-            return EFI_NOT_FOUND;
+            FreePool(handles);
+            return EFI_DEVICE_ERROR;
         }
-
-        s = v32_find_controller(path, &ch);
+        s = v32_controller_for_path(path, &ch);
         if (EFI_ERROR(s) || !ch) {
-            v32_fail(u"DISCOVERY", u"PCI CONTROLLER", s);
-            FreePool(usb_handles);
-            return s;
-        }
-
-        if (!*controller) {
-            EFI_PCI_IO_PROTOCOL *pci = NULL;
-            EFI_DEVICE_PATH_PROTOCOL *cpath = NULL;
-            UINTN sg = 0, b = 0, d = 0, f = 0;
-            UINT32 id = 0, cls = 0;
-            s = uefi_call_wrapper(BS->OpenProtocol, 6, ch, &PciGuid,
-                                  (VOID **)&pci, image, NULL,
-                                  EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-            if (EFI_ERROR(s)) { FreePool(usb_handles); return s; }
-            s = uefi_call_wrapper(pci->GetLocation, 5, pci, &sg, &b, &d, &f);
-            if (EFI_ERROR(s) || sg > 0xffffU || b > 0xffU || d > 0x1fU || f > 7U) {
-                s = EFI_DEVICE_ERROR;
-                v32_fail(u"DISCOVERY", u"PCI LOCATION", s);
-                FreePool(usb_handles);
-                return s;
-            }
-            s = cfg32(pci, 0x00, &id);
-            if (EFI_ERROR(s)) { FreePool(usb_handles); return s; }
-            s = cfg32(pci, 0x08, &cls);
-            if (EFI_ERROR(s) || ((cls >> 24) & 0xffU) != 0x0cU ||
-                ((cls >> 16) & 0xffU) != 0x03U ||
-                ((cls >> 8) & 0xffU) != 0x30U) {
-                s = EFI_UNSUPPORTED;
-                v32_fail(u"DISCOVERY", u"XHCI CLASS", s);
-                FreePool(usb_handles);
-                return s;
-            }
-            s = uefi_call_wrapper(BS->OpenProtocol, 6, ch,
-                                  &DevicePathProtocol, (VOID **)&cpath,
-                                  image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-            if (EFI_ERROR(s) || !cpath) {
-                v32_fail(u"DISCOVERY", u"CONTROLLER PATH", s);
-                FreePool(usb_handles);
-                return EFI_NOT_FOUND;
-            }
-            s = v32_copy_path(&h->controller_path, cpath);
-            if (EFI_ERROR(s)) {
-                v32_fail(u"DISCOVERY", u"CONTROLLER PATH COPY", s);
-                FreePool(usb_handles);
-                return s;
-            }
-            h->pci_segment = (UINT16)sg;
-            h->pci_bus = (UINT8)b;
-            h->pci_device = (UINT8)d;
-            h->pci_function = (UINT8)f;
-            h->pci_vendor = (UINT16)(id & 0xffffU);
-            h->pci_device_id = (UINT16)(id >> 16);
-            *controller = ch;
-        } else if (ch != *controller) {
-            s = EFI_UNSUPPORTED;
-            v32_fail(u"DISCOVERY", u"MULTIPLE XHCI CONTROLLERS", s);
-            FreePool(usb_handles);
+            FreePool(handles);
             return s;
         }
 
         if (kind == 1U) {
-            ++keyboards;
-            if (keyboards != 1U) {
-                s = EFI_ALREADY_STARTED;
-                v32_fail(u"DISCOVERY", u"MULTIPLE KEYBOARDS", s);
-                FreePool(usb_handles);
+            if (++keyboards != 1U) {
+                FreePool(handles);
+                return EFI_DEVICE_ERROR;
+            }
+            s = v32_fill_device(usb, &iface, path, kind, &h->keyboard);
+            if (EFI_ERROR(s)) {
+                FreePool(handles);
                 return s;
             }
-            s = v32_fill_hid(usb, &iface, path, kind, &h->keyboard);
+            selected_controller = ch;
         } else {
-            ++mice;
-            if (mice != 1U) {
-                s = EFI_ALREADY_STARTED;
-                v32_fail(u"DISCOVERY", u"MULTIPLE MICE", s);
-                FreePool(usb_handles);
+            if (++mice != 1U) {
+                FreePool(handles);
+                return EFI_DEVICE_ERROR;
+            }
+            s = v32_fill_device(usb, &iface, path, kind, &h->mouse);
+            if (EFI_ERROR(s)) {
+                FreePool(handles);
                 return s;
             }
-            s = v32_fill_hid(usb, &iface, path, kind, &h->mouse);
-        }
-        if (EFI_ERROR(s)) {
-            v32_fail(u"DISCOVERY", kind == 1U ? u"KEYBOARD ENDPOINT" : u"MOUSE ENDPOINT", s);
-            FreePool(usb_handles);
-            return s;
+            if (selected_controller && ch != selected_controller) {
+                /* Gate 6 uses one controller; keep the mouse out rather than
+                 * silently changing controller ownership. */
+                uefi_call_wrapper(BS->SetMem, 3, &h->mouse, sizeof(h->mouse), 0);
+                --mice;
+            }
         }
     }
+    FreePool(handles);
 
-    h->device_count = (UINT16)(keyboards + mice);
-    if (keyboards != 1U || h->device_count == 0U || h->device_count > 2U) {
-        s = keyboards ? EFI_DEVICE_ERROR : EFI_NOT_FOUND;
-        v32_fail(u"DISCOVERY", u"SELECTED HID SET", s);
-        FreePool(usb_handles);
-        return s;
+    if (keyboards != 1U || !selected_controller)
+        return EFI_NOT_FOUND;
+
+    h->device_count = (UINT16)(1U + (mice ? 1U : 0U));
+    *controller = selected_controller;
+
+    {
+        EFI_PCI_IO_PROTOCOL *p = NULL;
+        EFI_DEVICE_PATH_PROTOCOL *cp = NULL;
+        UINTN seg = 0, bus = 0, dev = 0, fun = 0;
+        UINT32 id = 0;
+
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, selected_controller,
+                              &PciGuid, (VOID **)&p, image, NULL,
+                              EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(s)) return s;
+        s = uefi_call_wrapper(p->GetLocation, 5, p, &seg, &bus, &dev, &fun);
+        if (EFI_ERROR(s)) return s;
+        s = cfg32(p, 0, &id);
+        if (EFI_ERROR(s)) return s;
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, selected_controller,
+                              &DevicePathProtocol, (VOID **)&cp,
+                              image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(s) || !cp) return EFI_DEVICE_ERROR;
+        s = v32_copy_path(&h->controller_path, cp);
+        if (EFI_ERROR(s)) return s;
+        h->pci_segment = (UINT16)seg;
+        h->pci_bus = (UINT8)bus;
+        h->pci_device = (UINT8)dev;
+        h->pci_function = (UINT8)fun;
+        h->pci_vendor = (UINT16)(id & 0xffffU);
+        h->pci_device_id = (UINT16)(id >> 16);
     }
-    FreePool(usb_handles);
     return EFI_SUCCESS;
 }
 
-static EFI_STATUS v32_supported_protocol(EFI_PCI_IO_PROTOCOL *p, UINT32 hcc,
-                                         UINT8 port, UINT8 *major,
-                                         UINT8 *minor, UINT8 *slot_type,
+static EFI_STATUS v32_validate_handoff(const V32_HANDOFF *h)
+{
+    if (!h || h->magic != V32_HANDOFF_MAGIC ||
+        h->version != V32_HANDOFF_VERSION || h->size != sizeof(*h) ||
+        h->device_count < 1U || h->device_count > 2U ||
+        h->keyboard.kind != 1U || h->keyboard.root_port == 0xffU ||
+        h->keyboard.device_path.size == 0U ||
+        h->controller_path.size == 0U)
+        return EFI_DEVICE_ERROR;
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS v32_bind_controller(EFI_HANDLE controller,
+                                      const V32_HANDOFF *h,
+                                      EFI_PCI_IO_PROTOCOL **out)
+{
+    EFI_PCI_IO_PROTOCOL *p = NULL;
+    UINTN seg = 0, bus = 0, dev = 0, fun = 0;
+    UINT32 id = 0, cls = 0;
+    EFI_STATUS s;
+
+    s = uefi_call_wrapper(BS->OpenProtocol, 6, controller, &PciGuid,
+                          (VOID **)&p, NULL, NULL,
+                          EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+    if (EFI_ERROR(s)) return s;
+    s = uefi_call_wrapper(p->GetLocation, 5, p, &seg, &bus, &dev, &fun);
+    if (EFI_ERROR(s) || seg != h->pci_segment || bus != h->pci_bus ||
+        dev != h->pci_device || fun != h->pci_function)
+        return EFI_DEVICE_ERROR;
+    s = cfg32(p, 0, &id);
+    if (EFI_ERROR(s) || (UINT16)(id & 0xffffU) != h->pci_vendor ||
+        (UINT16)(id >> 16) != h->pci_device_id)
+        return EFI_DEVICE_ERROR;
+    s = cfg32(p, 8, &cls);
+    if (EFI_ERROR(s) || ((cls >> 24) & 0xffU) != 0x0cU ||
+        ((cls >> 16) & 0xffU) != 0x03U ||
+        ((cls >> 8) & 0xffU) != 0x30U)
+        return EFI_UNSUPPORTED;
+    *out = p;
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS v32_pci_attributes(EFI_PCI_IO_PROTOCOL *p,
+                                     UINT64 *original, UINT64 *enabled)
+{
+    EFI_STATUS s;
+    UINT64 attrs = 0;
+    const UINT64 need = EFI_PCI_IO_ATTRIBUTE_MEMORY |
+                        EFI_PCI_IO_ATTRIBUTE_BUS_MASTER;
+    s = uefi_call_wrapper(p->Attributes, 4, p,
+                          EfiPciIoAttributeOperationGet, 0, &attrs);
+    if (EFI_ERROR(s)) return s;
+    *original = attrs;
+    *enabled = 0;
+    if ((attrs & need) != need) {
+        UINT64 supported = 0;
+        s = uefi_call_wrapper(p->Attributes, 4, p,
+                              EfiPciIoAttributeOperationSupported, need,
+                              &supported);
+        if (EFI_ERROR(s) || (supported & need) != need)
+            return EFI_UNSUPPORTED;
+        s = uefi_call_wrapper(p->Attributes, 4, p,
+                              EfiPciIoAttributeOperationEnable, need, NULL);
+        if (EFI_ERROR(s)) return s;
+        *enabled = need & ~attrs;
+    }
+    return EFI_SUCCESS;
+}
+
+static UINT32 v32_port_write_base(UINT32 x)
+{
+    /* Preserve RO/RW fields; never replay RW1C/RW1S change bits. */
+    return (x & V32_PORT_RO_FIELDS) | (x & V32_PORT_RW_FIELDS);
+}
+
+static EFI_STATUS v32_protocol_slot_type(EFI_PCI_IO_PROTOCOL *p, UINT32 hcc,
+                                         UINT32 port, UINT32 *slot_type,
                                          UINT32 *reads)
 {
     UINT32 off = ((hcc >> 16) & 0xffffU) * 4U;
-    UINT32 hdr, ports, slot, next;
-    UINT8 po, pc;
     UINTN n = 0;
-    EFI_STATUS s;
-    while (off && n++ < 256U) {
-        s = mr32(p, off, &hdr); ++*reads;
+    *slot_type = 0;
+    while (off && n++ < 64U) {
+        UINT32 d0, d2, d3, next;
+        EFI_STATUS s = mr32(p, off, &d0);
+        (*reads)++;
         if (EFI_ERROR(s)) return s;
-        if ((hdr & 0xffU) == 2U) {
-            s = mr32(p, off + 8U, &ports); ++*reads;
+        if ((d0 & 0xffU) == 2U) {
+            s = mr32(p, off + 8U, &d2); (*reads)++;
             if (EFI_ERROR(s)) return s;
-            po = (UINT8)(ports & 0xffU);
-            pc = (UINT8)((ports >> 8) & 0xffU);
-            if (pc && port >= po && (UINT8)(port - po) < pc) {
-                s = mr32(p, off + 12U, &slot); ++*reads;
-                if (EFI_ERROR(s)) return s;
-                *major = (UINT8)((hdr >> 24) & 0xffU);
-                *minor = (UINT8)((hdr >> 16) & 0xffU);
-                *slot_type = (UINT8)(slot & 0x1fU);
-                return EFI_SUCCESS;
+            s = mr32(p, off + 12U, &d3); (*reads)++;
+            if (EFI_ERROR(s)) return s;
+            {
+                UINT32 po = d2 & 0xffU;
+                UINT32 pc = (d2 >> 8) & 0xffU;
+                if (pc && port >= po && port < po + pc) {
+                    *slot_type = d3 & 0x1fU;
+                    return EFI_SUCCESS;
+                }
             }
         }
-        next = ((hdr >> 8) & 0xffU) * 4U;
+        next = ((d0 >> 8) & 0xffU) * 4U;
         if (!next) break;
         off += next;
     }
     return EFI_NOT_FOUND;
 }
 
-static EFI_STATUS v32_portsc_write(EFI_PCI_IO_PROTOCOL *p, UINT32 off,
-                                   UINT32 old, UINT32 set_bits,
-                                   UINT32 clear_bits, UINT32 w1c,
-                                   UINT32 *writes)
+static void v32_clear_trb(VOID *base, UINTN index)
 {
-    UINT32 v = old & V32_PORTSC_RW_MASK;
-    v &= ~clear_bits;
-    v |= set_bits;
-    v |= w1c;
-    EFI_STATUS s = mw32(p, off, v);
-    ++*writes;
-    return s;
+    uefi_call_wrapper(BS->SetMem, 3, (UINT8 *)base + index * 16U, 16U, 0);
 }
 
-static EFI_STATUS v32_wait_event(EFI_PCI_IO_PROTOCOL *p, UINT32 erdp_off,
-                                 struct dma_obj *event_ring, UINT8 type,
-                                 UINT8 port, UINT64 trb_ptr, UINT8 slot_expected,
-                                 UINT8 *slot_result, UINTN *event_index,
-                                 UINT8 *cycle, UINT32 *reads, UINT32 *writes)
+static UINT64 v32_trb_ptr(const struct dma_obj *ring, UINTN index)
 {
-    UINTN loops;
-    for (loops = 0; loops < 20000U; ++loops) {
-        volatile UINT32 *e = (volatile UINT32 *)((UINT8 *)event_ring->host +
-                                                  (*event_index) * 16U);
-        UINT32 dw0 = e[0], dw1 = e[1], dw2 = e[2], dw3 = e[3];
-        if ((dw3 & TRB_CYCLE) == *cycle) {
-            UINT32 event_type = (dw3 & TRB_TYPE_MASK) >> TRB_TYPE_SHIFT;
-            UINT8 event_port = (UINT8)(dw0 >> 24);
-            UINT8 event_slot = (UINT8)(dw3 >> 24);
-            UINT32 cc = (dw2 >> 24) & 0xffU;
-            UINT64 ptr = ((UINT64)dw1 << 32) | dw0;
-            BOOLEAN match = event_type == type;
-            ++*reads;
-            if (type == V32_TRB_PORT_STATUS_CHANGE)
-                match = match && event_port == port;
-            else
-                match = match && cc == CC_SUCCESS && ptr == trb_ptr &&
-                        (slot_expected == 0U || event_slot == slot_expected);
-            *event_index = *event_index + 1U;
-            if (*event_index == EVENT_TRBS) {
-                *event_index = 0;
+    return ring->dev + index * 16U;
+}
+
+static EFI_STATUS v32_poll_event(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
+                                 struct dma_obj *ev, UINTN *index,
+                                 UINT8 *cycle, UINT32 *type, UINT32 *dw0,
+                                 UINT32 *dw2, UINT32 *dw3, UINT64 *ptr)
+{
+    UINTN i;
+    UINT32 *r = (UINT32 *)ev->host;
+    for (i = 0; i < 10000U; ++i) {
+        UINTN n = *index;
+        UINT32 d3 = r[n * 4U + 3U];
+        if ((d3 & 1U) == *cycle) {
+            UINT64 processed = v32_trb_ptr(ev, n);
+            *type = (d3 >> 10) & 0x3fU;
+            *dw0 = r[n * 4U + 0U];
+            *dw2 = r[n * 4U + 2U];
+            *dw3 = d3;
+            *ptr = ((UINT64)r[n * 4U + 1U] << 32) | r[n * 4U + 0U];
+            v32_clear_trb(ev->host, n);
+            __sync_synchronize();
+            n++;
+            if (n == V32_EVENT_TRBS) {
+                n = 0;
                 *cycle ^= 1U;
             }
+            *index = n;
+            /* ERDP is the next event software expects to consume. */
+            if (EFI_ERROR(mw64(p, ir + V32_ERDP_OFF,
+                               processed | 0x8ULL)))
+                return EFI_DEVICE_ERROR;
             {
-                UINT64 next = event_ring->dev + (*event_index) * 16U;
-                EFI_STATUS s = mw64(p, erdp_off, next & ERDP_ADDR_MASK);
-                *writes += 2U;
-                if (EFI_ERROR(s)) return s;
+                UINT32 iman;
+                if (EFI_ERROR(mr32(p, ir + V32_IMAN_OFF, &iman)))
+                    return EFI_DEVICE_ERROR;
+                if (iman & V32_IMAN_IP) {
+                    if (EFI_ERROR(mw32(p, ir + V32_IMAN_OFF,
+                                       iman | V32_IMAN_IP)))
+                        return EFI_DEVICE_ERROR;
+                }
             }
-            if (match) {
-                if (slot_result) *slot_result = event_slot;
-                return EFI_SUCCESS;
-            }
+            return EFI_SUCCESS;
         }
         uefi_call_wrapper(BS->Stall, 1, 1000);
     }
     return EFI_TIMEOUT;
 }
 
-static BOOLEAN v32_dma_ok(const struct dma_obj *d, BOOLEAN ac64)
+static EFI_STATUS v32_expect_command(EFI_PCI_IO_PROTOCOL *p, UINT32 ir,
+                                     struct dma_obj *ev, UINTN *ev_index,
+                                     UINT8 *ev_cycle, UINT64 command_addr,
+                                     UINT32 expected_slot, UINT32 *slot)
 {
-    return ac64 || d->dev <= 0xffffffffULL;
-}
-
-static EFI_STATUS v32_attrs(EFI_PCI_IO_PROTOCOL *p, UINT64 *changed)
-{
-    UINT64 supported = 0, attrs = 0;
-    UINT64 need = EFI_PCI_IO_ATTRIBUTE_MEMORY | EFI_PCI_IO_ATTRIBUTE_BUS_MASTER;
-    EFI_STATUS s;
-    *changed = 0;
-    s = uefi_call_wrapper(p->Attributes, 4, p,
-                           EfiPciIoAttributeOperationSupported, 0, &supported);
-    if (EFI_ERROR(s) || (supported & need) != need) return EFI_UNSUPPORTED;
-    s = uefi_call_wrapper(p->Attributes, 4, p,
-                           EfiPciIoAttributeOperationGet, 0, &attrs);
+    UINT32 type, dw0, dw2, dw3;
+    UINT64 ptr;
+    EFI_STATUS s = v32_poll_event(p, ir, ev, ev_index, ev_cycle,
+                                  &type, &dw0, &dw2, &dw3, &ptr);
     if (EFI_ERROR(s)) return s;
-    if ((attrs & need) != need) {
-        UINT64 enable = need & ~attrs;
-        s = uefi_call_wrapper(p->Attributes, 4, p,
-                               EfiPciIoAttributeOperationEnable, enable, NULL);
-        if (EFI_ERROR(s)) return s;
-        *changed = enable;
-    }
+    if (type != V32_TRB_COMMAND_EVENT || ptr != command_addr ||
+        ((dw2 >> 24) & 0xffU) != V32_CC_SUCCESS)
+        return EFI_DEVICE_ERROR;
+    if (expected_slot && ((dw3 >> 24) & 0xffU) != expected_slot)
+        return EFI_DEVICE_ERROR;
+    if (slot) *slot = (dw3 >> 24) & 0xffU;
     return EFI_SUCCESS;
 }
 
-static void v32_fatal_running(UINT32 *reads, UINT32 *writes)
+static EFI_STATUS v32_start(EFI_PCI_IO_PROTOCOL *p, UINT32 op,
+                            UINT32 *reads, UINT32 *writes)
 {
-    Print(u"\r\nFATAL: XHCI RUNNING STATE UNCERTAIN\r\n");
-    Print(u"FAIL STAGE=%s OP=%s STATUS=%r\r\n", fail_stage, fail_op, fail_status);
-    Print(u"MMIO READS=%u WRITES=%u\r\n", *reads, *writes);
-    for (;;) uefi_call_wrapper(BS->Stall,1,1000000);
+    UINT32 cmd, sts;
+    EFI_STATUS s = mr32(p, op, &cmd);
+    (*reads)++;
+    if (EFI_ERROR(s)) return s;
+    cmd &= ~(V32_CMD_INTE | V32_CMD_HSEE);
+    cmd |= V32_CMD_RUN;
+    s = mw32(p, op, cmd); (*writes)++;
+    if (EFI_ERROR(s)) return s;
+    s = wait_hch(p, op, FALSE, 1000U, &sts, reads);
+    return s;
 }
 
-static void v32_press_key(EFI_SYSTEM_TABLE *st)
+static EFI_STATUS v32_halt_and_reset(EFI_PCI_IO_PROTOCOL *p, UINT32 op,
+                                     UINT32 *reads, UINT32 *writes)
 {
-    EFI_INPUT_KEY key;
-    Print(u"PRESS A KEY TO CONTINUE\r\n");
-    for (;;) {
-        if (st && st->ConIn &&
-            !EFI_ERROR(uefi_call_wrapper(st->ConIn->ReadKeyStroke, 2,
-                                          st->ConIn, &key))) return;
-        uefi_call_wrapper(BS->Stall, 1, 10000);
-    }
+    UINT32 cmd, sts;
+    EFI_STATUS s = mr32(p, op, &cmd); (*reads)++;
+    if (EFI_ERROR(s)) return s;
+    cmd &= ~(V32_CMD_RUN | V32_CMD_INTE | V32_CMD_HSEE);
+    s = mw32(p, op, cmd); (*writes)++;
+    if (EFI_ERROR(s)) return s;
+    s = wait_hch(p, op, TRUE, 1000U, &sts, reads);
+    if (EFI_ERROR(s)) return s;
+    s = reset_xhci(p, op, &cmd, &sts, reads, writes);
+    if (EFI_ERROR(s)) return s;
+    return (sts & V32_STS_HCH) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 {
-    EFI_STATUS s = EFI_SUCCESS, ts;
+    V32_HANDOFF h;
     EFI_HANDLE controller = NULL;
     EFI_PCI_IO_PROTOCOL *p = NULL;
-    V32_HANDOFF h, b;
-    UINT64 attrs_changed = 0;
-    UINT32 bar0 = 0, bar1 = 0, cap = 0, hcs1 = 0, hcs2 = 0, hcc = 0;
-    UINT32 op = 0, db = 0, rt = 0, ir = 0, cmd = 0, status = 0, iman = 0;
-    UINT32 page_reg = 0, max_slots = 0, scratchpads = 0;
-    UINT8 proto_major = 0, proto_minor = 0, slot_type = 0, speed = 0, slot_id = 0;
-    UINT32 reads = 0, writes = 0;
-    UINTN shift = 0, xpage = 0, scratch_pages = 0;
-    UINTN event_index = 0;
-    UINT8 event_cycle = 1U;
-    BOOLEAN ac64 = FALSE, halted = FALSE, running = FALSE;
-    BOOLEAN disconnected = FALSE, attrs_changed_here = FALSE, refs_cleared = FALSE;
-    UINT64 saved_rflags = 0;
-    BOOLEAN cpu_interrupts_disabled = FALSE;
-    struct dma_obj dcbaa_d = {0}, spa_d = {0}, cr_d = {0}, ev_d = {0}, erst_d = {0};
-    struct dma_obj input_d = {0}, output_d = {0}, ep0_d = {0};
+    EFI_STATUS s = EFI_SUCCESS;
+    UINT64 saved_flags = 0, pci_original = 0, pci_enabled = 0;
+    BOOLEAN interrupts_disabled = FALSE, pci_changed = FALSE;
+    BOOLEAN running = FALSE, halted = FALSE, dma_live = FALSE;
+    UINT32 cap = 0, ver = 0, hcs1 = 0, hcs2 = 0, hcc = 0;
+    UINT32 op = 0, db = 0, rt = 0, ir = 0, pagesize = 0;
+    UINT32 reads = 0, writes = 0, slot_type = 0, slot = 0;
+    UINT32 portsc = 0, speed = 0;
+    UINTN shift = 0, xpage = 0, scratchpads = 0, scratch_pages = 1;
+    UINTN cmd_index = 0, ev_index = 0;
+    UINT8 cmd_cycle = 1, ev_cycle = 1;
+    UINT32 *cmd_ring = NULL;
+    UINT64 *dcbaa = NULL, *scratch_array = NULL, *erst = NULL;
+    UINT8 *inctx = NULL, *outctx = NULL;
+    struct dma_obj dcbaa_d = {0}, spa_d = {0}, cr_d = {0}, ev_d = {0};
+    struct dma_obj erst_d = {0}, inctx_d = {0}, outctx_d = {0}, ep0_d = {0};
     struct dma_obj *scratch = NULL;
-    UINT64 *dcbaa = NULL, *spa = NULL, *erst = NULL;
-    UINT32 *cr = NULL, *input = NULL, *ep0 = NULL;
-    UINT32 portsc_off;
-    UINT8 xhci_port = 0U;
+    UINT64 command_addr = 0;
+    UINT32 ctxsz = 32;
 
     InitializeLib(image, st);
-    uefi_call_wrapper(BS->SetMem, 3, &h, sizeof(h), 0);
-    h.magic = V32_HANDOFF_MAGIC;
-    h.version = V32_HANDOFF_VERSION;
-    h.size = sizeof(h);
+    Print(u"TOSHIBA xHCI V32 / CLEAN GATE 6 REIMPLEMENTATION\r\n");
+    Print(u"UEFI DISCOVERY -> DISCONNECT -> FRESH xHCI -> PORT RESET -> ENABLE SLOT -> ADDRESS DEVICE\r\n");
+    Print(u"KEYBOARD + OPTIONAL MOUSE HANDOFF / NO BRIDGE USB DISCOVERY / NO USB TRANSFER\r\n");
 
-    Print(u"TOSHIBA xHCI V32 / GATE 6 / PORT RESET + ADDRESS DEVICE\r\n");
-    Print(u"UEFI KEYBOARD + MOUSE -> QUIESCE -> FRESH xHCI / LS+FS ONLY\r\n");
-
-    /* Phase A: UEFI discovery producer. Everything below consumes only the
-       completed handoff and controller handle; it performs no USB discovery. */
+    /* Phase A: UEFI is the sole USB discovery provider. */
     s = v32_produce_handoff(image, &h, &controller);
-    if (EFI_ERROR(s)) goto out;
-    b = h;
-    Print(u"UEFI KEYBOARD: VID=%04x PID=%04x PORT=%u IF=%u EP=%02x EP0DESC=%u\r\n",
-          b.keyboard.vendor_id, b.keyboard.product_id, b.keyboard.root_port,
-          b.keyboard.interface_number, b.keyboard.interrupt_in_endpoint,
-          b.keyboard.ep0_mps_descriptor);
-    if (b.mouse.kind == 2U)
-        Print(u"UEFI MOUSE: VID=%04x PID=%04x PORT=%u IF=%u EP=%02x\r\n",
-              b.mouse.vendor_id, b.mouse.product_id, b.mouse.root_port,
-              b.mouse.interface_number, b.mouse.interrupt_in_endpoint);
-    Print(u"HANDOFF: MAGIC=%08x VERSION=%u SIZE=%u DEVICES=%u CONTROLLER-PATH=%u\r\n",
-          b.magic, b.version, b.size, b.device_count, b.controller_path.size);
-    Print(u"CONTROLLER: %04x:%02x:%02x.%x %04x:%04x\r\n",
-          b.pci_segment, b.pci_bus, b.pci_device, b.pci_function,
-          b.pci_vendor, b.pci_device_id);
-    if (b.magic != V32_HANDOFF_MAGIC || b.version != V32_HANDOFF_VERSION ||
-        b.size != sizeof(b) || b.device_count < 1U || b.device_count > 2U ||
-        b.keyboard.kind != 1U ||
-        (b.mouse.kind != 0U && b.mouse.kind != 2U) ||
-        !b.controller_path.size || !b.keyboard.device_path.size) {
-        s = EFI_INVALID_PARAMETER;
-        v32_fail(u"HANDOFF", u"VALIDATION", s);
-        goto out;
+    if (EFI_ERROR(s)) { v32_fail(u"DISCOVERY", u"HANDOFF", s); goto out; }
+    s = v32_validate_handoff(&h);
+    if (EFI_ERROR(s)) { v32_fail(u"HANDOFF", u"VALIDATE", s); goto out; }
+    Print(u"HANDOFF: DEVICES=%u KEYBOARD PORT=%u VID=%04x PID=%04x\r\n",
+          h.device_count, h.keyboard.root_port, h.keyboard.vendor_id,
+          h.keyboard.product_id);
+
+    /* Validate the exact controller path before releasing UEFI ownership. */
+    {
+        EFI_DEVICE_PATH_PROTOCOL *cp = NULL;
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, controller,
+                              &DevicePathProtocol, (VOID **)&cp,
+                              image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(s) || !v32_path_equal(&h.controller_path, cp)) {
+            if (!EFI_ERROR(s)) s = EFI_DEVICE_ERROR;
+            v32_fail(u"HANDOFF", u"CONTROLLER PATH", s);
+            goto out;
+        }
     }
 
     s = uefi_call_wrapper(BS->DisconnectController, 3, controller, NULL, NULL);
-    if (EFI_ERROR(s)) { v32_fail(u"QUIESCE", u"DISCONNECT CONTROLLER", s); goto out; }
-    disconnected = TRUE;
-    Print(u"UEFI USB STACK QUIESCED / DISCONNECT=PASS\r\n");
-    saved_rflags = v32_disable_cpu_interrupts();
-    cpu_interrupts_disabled = TRUE;
+    if (EFI_ERROR(s)) { v32_fail(u"HANDOFF", u"DISCONNECT CONTROLLER", s); goto out; }
+    Print(u"UEFI USB STACK: DISCONNECTED\r\n");
 
-    s = v32_pci_match(controller, b.pci_segment, b.pci_bus,
-                      b.pci_device, b.pci_function,
-                      b.pci_vendor, b.pci_device_id, &p);
-    if (EFI_ERROR(s)) { v32_fail(u"BIND", u"HANDOFF CONTROLLER", s); goto out; }
-    s = v32_attrs(p, &attrs_changed);
-    if (EFI_ERROR(s)) { v32_fail(u"PCI ATTR", u"MEMORY+BUS MASTER", s); goto out; }
-    attrs_changed_here = attrs_changed != 0U;
+    saved_flags = v32_disable_interrupts();
+    interrupts_disabled = TRUE;
 
-    s = cfg32(p, 0x10U, &bar0);
-    if (EFI_ERROR(s)) { v32_fail(u"PCI", u"BAR0", s); goto out; }
-    if (bar0 & 1U) { s = EFI_UNSUPPORTED; v32_fail(u"PCI", u"BAR I/O", s); goto out; }
-    if (((bar0 >> 1) & 3U) == 2U) {
-        s = cfg32(p, 0x14U, &bar1);
-        if (EFI_ERROR(s)) { v32_fail(u"PCI", u"BAR1", s); goto out; }
-    } else if (((bar0 >> 1) & 3U) != 0U) {
-        s = EFI_UNSUPPORTED; v32_fail(u"PCI", u"BAR TYPE", s); goto out;
-    }
-    Print(u"BAR=%016lx WIDTH=%s\r\n",
-          (((bar0 >> 1) & 3U) == 2U) ? (((UINT64)bar1 << 32) | (bar0 & ~0xfU)) : (UINT64)(bar0 & ~0xfU),
-          (((bar0 >> 1) & 3U) == 2U) ? u"64" : u"32");
+    /* Phase B: bind only to the controller handle selected above. */
+    s = v32_bind_controller(controller, &h, &p);
+    if (EFI_ERROR(s)) { v32_fail(u"BIND", u"PCI ID", s); goto out; }
+    s = v32_pci_attributes(p, &pci_original, &pci_enabled);
+    if (EFI_ERROR(s)) { v32_fail(u"BIND", u"PCI ATTRIBUTES", s); goto out; }
+    pci_changed = pci_enabled != 0;
 
-    s = mr32(p, 0, &cap); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"CAPLENGTH+VERSION", s); goto out; }
-    op = cap & 0xffU;
+    s = cfg32(p, 0x10, &cap); /* temporary BAR read */
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"BAR", s); goto out; }
+    if (cap & 1U) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"MMIO BAR", s); goto out; }
     {
-        UINT16 ver = (UINT16)(cap >> 16);
-        if (ver < XHCI_MIN_VERSION) {
-            s = EFI_UNSUPPORTED;
-            v32_fail(u"CAPS", u"VERSION", s);
-            goto out;
+        UINT32 bar_hi = 0;
+        UINT32 type = (cap >> 1) & 3U;
+        if (type == 2U) {
+            s = cfg32(p, 0x14, &bar_hi);
+            if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"BAR HIGH", s); goto out; }
         }
-        Print(u"xHCI VERSION=%u.%02u\r\n", ver >> 8, ver & 0xffU);
+        Print(u"PCI: BAR=%08x/%08x TYPE=%u\r\n", cap, bar_hi, type);
     }
-    s = mr32(p, 4, &hcs1); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCSPARAMS1", s); goto out; }
-    s = mr32(p, 8, &hcs2); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCSPARAMS2", s); goto out; }
-    s = mr32(p, 0x10U, &hcc); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCCPARAMS1", s); goto out; }
-    s = mr32(p, 0x14U, &db); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"DBOFF", s); goto out; }
-    s = mr32(p, 0x18U, &rt); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"RTSOFF", s); goto out; }
-    s = mr32(p, op + 8U, &page_reg); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"PAGESIZE", s); goto out; }
-    if (!page_reg) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGESIZE ZERO", s); goto out; }
-    db &= ~3U; rt &= ~0x1fU; ir = rt + 0x20U;
-    max_slots = hcs1 & 0xffU;
-    scratchpads = (((hcs2 >> 27) & 0x1fU) << 5) | ((hcs2 >> 21) & 0x1fU);
-    ac64 = (hcc & 1U) != 0U;
-    while (shift < 32U && !(page_reg & (1U << shift))) ++shift;
+
+    s = mr32(p, 0, &cap); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"CAPLENGTH", s); goto out; }
+    op = cap & 0xffU;
+    s = mr16(p, 2, (UINT16 *)&ver); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCIVERSION", s); goto out; }
+    if ((ver & 0xffffU) < 0x0100U) {
+        s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"xHCI VERSION", s); goto out;
+    }
+    s = mr32(p, 4, &hcs1); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCSPARAMS1", s); goto out; }
+    s = mr32(p, 8, &hcs2); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCSPARAMS2", s); goto out; }
+    s = mr32(p, 0x10, &hcc); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCCPARAMS1", s); goto out; }
+    s = mr32(p, op + 8U, &pagesize); reads++;
+    if (EFI_ERROR(s) || !pagesize) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGESIZE", s); goto out; }
+    while (shift < 32U && !(pagesize & (1U << shift))) shift++;
     if (shift >= 32U) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGE BIT", s); goto out; }
     xpage = (UINTN)1U << (12U + shift);
     if (xpage > 0x100000U) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGE SIZE", s); goto out; }
     scratch_pages = xpage / 4096U;
-    if (!max_slots || scratchpads > MAX_SCRATCHPADS) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"LIMITS", s); goto out; }
-    Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u PAGE=%u AC64=%u CTXSZ=%u\r\n",
-          max_slots, scratchpads, (UINT32)xpage, ac64 ? 1U : 0U,
-          ((hcc >> 2) & 1U) ? 64U : 32U);
-
-    s = mr32(p, op + 4U, &status); ++reads; if (EFI_ERROR(s)) { v32_fail(u"HALT", u"USBSTS", s); goto out; }
-    s = mr32(p, op, &cmd); ++reads; if (EFI_ERROR(s)) { v32_fail(u"HALT", u"USBCMD", s); goto out; }
-    if (!(status & STS_HCH)) {
-        s = mw32(p, op, cmd & ~(CMD_RUN | CMD_INTE | CMD_HSEE)); ++writes;
-        if (EFI_ERROR(s)) { v32_fail(u"HALT", u"STOP", s); goto out; }
-        s = wait_hch(p, op, TRUE, 10000U, &status, &reads);
-        if (EFI_ERROR(s)) { v32_fail(u"HALT", u"HCH", s); goto out; }
+    if (!scratch_pages) scratch_pages = 1;
+    if (hcc & V32_HCC_CTXSZ) ctxsz = 64;
+    scratchpads = (((hcs2 >> 21) & 31U) << 5) | ((hcs2 >> 27) & 31U);
+    if (!(hcc & V32_HCC_AC64)) {
+        /* AC64=0 is legal, but every returned DMA address must remain below 4G. */
+        Print(u"CAPS: AC64=0 / DMA MUST REMAIN BELOW 4G\r\n");
     }
-    halted = TRUE;
-    s = reset_xhci(p, op, &cmd, &status, &reads, &writes); if (EFI_ERROR(s)) goto out;
-    if (!(status & STS_HCH)) { s = EFI_DEVICE_ERROR; goto out; }
+    Print(u"xHCI VERSION=%u.%02u SLOTS=%u SCRATCHPADS=%u AC64=%u CONTEXT=%u PAGESIZE=%u\r\n",
+          (ver >> 8) & 0xffU, ver & 0xffU, hcs1 & 0xffU, scratchpads,
+          (hcc & V32_HCC_AC64) ? 1U : 0U, ctxsz, (UINT32)xpage);
 
-    s = dma_alloc(p, 1, &dcbaa_d); if (EFI_ERROR(s)) goto out;
-    s = dma_alloc(p, 1, &spa_d); if (EFI_ERROR(s)) goto out;
-    s = dma_alloc(p, 1, &cr_d); if (EFI_ERROR(s)) goto out;
-    s = dma_alloc(p, 1, &ev_d); if (EFI_ERROR(s)) goto out;
-    s = dma_alloc(p, 1, &erst_d); if (EFI_ERROR(s)) goto out;
-    if (scratchpads) {
-        scratch = (struct dma_obj *)AllocateZeroPool(sizeof(struct dma_obj) * scratchpads);
-        if (!scratch) { s = EFI_OUT_OF_RESOURCES; goto out; }
-        for (UINT32 i = 0; i < scratchpads; ++i) {
-            s = dma_alloc(p, scratch_pages, &scratch[i]);
-            if (EFI_ERROR(s)) goto out;
+    s = mr32(p, 0x14, &db); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"DBOFF", s); goto out; }
+    db &= ~3U;
+    s = mr32(p, 0x18, &rt); reads++;
+    if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"RTSOFF", s); goto out; }
+    rt &= ~31U;
+    ir = rt + 0x20U;
+
+    s = v32_halt_and_reset(p, op, &reads, &writes);
+    if (EFI_ERROR(s)) { v32_fail(u"RESET", u"HALT RESET", s); goto out; }
+    halted = TRUE;
+
+    /* Allocate every controller-referenced object through the proven DMA path. */
+    s = dma_alloc(p, 1, &dcbaa_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"DCBAA", s); goto out; }
+    scratch_pages = (scratchpads * sizeof(UINT64) + 4095U) / 4096U;
+    if (!scratch_pages) scratch_pages = 1;
+    s = dma_alloc(p, scratch_pages, &spa_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"SCRATCH ARRAY", s); goto out; }
+    s = dma_alloc(p, 1, &cr_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"COMMAND RING", s); goto out; }
+    s = dma_alloc(p, 1, &ev_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"EVENT RING", s); goto out; }
+    s = dma_alloc(p, 1, &erst_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"ERST", s); goto out; }
+    s = dma_alloc(p, 1, &inctx_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"INPUT CONTEXT", s); goto out; }
+    s = dma_alloc(p, 1, &outctx_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"OUTPUT CONTEXT", s); goto out; }
+    s = dma_alloc(p, 1, &ep0_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"EP0 RING", s); goto out; }
+    dma_live = TRUE;
+
+    if ((dcbaa_d.dev & 63ULL) || (inctx_d.dev & 63ULL) ||
+        (outctx_d.dev & 63ULL) || (ep0_d.dev & 15ULL) || (cr_d.dev & 63ULL) ||
+        (ev_d.dev & 63ULL) || (erst_d.dev & 63ULL)) {
+        s = EFI_BAD_BUFFER_SIZE; v32_fail(u"DMA", u"ALIGNMENT", s); goto out;
+    }
+    if (!(hcc & V32_HCC_AC64)) {
+        struct dma_obj *ds[] = { &dcbaa_d, &spa_d, &cr_d, &ev_d, &erst_d,
+                                 &inctx_d, &outctx_d, &ep0_d };
+        UINTN k;
+        for (k = 0; k < sizeof(ds)/sizeof(ds[0]); ++k) {
+            if (ds[k]->dev >> 32) {
+                s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"AC64 ADDRESS", s); goto out;
+            }
         }
     }
-    if (!v32_dma_ok(&dcbaa_d, ac64) || !v32_dma_ok(&spa_d, ac64) ||
-        !v32_dma_ok(&cr_d, ac64) || !v32_dma_ok(&ev_d, ac64) ||
-        !v32_dma_ok(&erst_d, ac64)) {
-        s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"ADDRESSING", s); goto out;
+
+    if (scratchpads) {
+        s = uefi_call_wrapper(BS->AllocatePool, 3, EfiBootServicesData,
+                              scratchpads * sizeof(struct dma_obj),
+                              (VOID **)&scratch);
+        if (EFI_ERROR(s)) { v32_fail(u"DMA", u"SCRATCH DESCRIPTORS", s); goto out; }
+        uefi_call_wrapper(BS->SetMem, 3, scratch,
+                          scratchpads * sizeof(struct dma_obj), 0);
+        for (UINTN i = 0; i < scratchpads; ++i) {
+            s = dma_alloc(p, scratch_pages, &scratch[i]);
+            if (EFI_ERROR(s)) { v32_fail(u"DMA", u"SCRATCHPAD", s); goto out; }
+            if (scratch[i].dev & ((UINT64)xpage - 1ULL)) {
+                s = EFI_BAD_BUFFER_SIZE; v32_fail(u"DMA", u"SCRATCH ALIGN", s); goto out;
+            }
+            if (!(hcc & V32_HCC_AC64) && (scratch[i].dev >> 32)) {
+                s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"SCRATCH AC64", s); goto out;
+            }
+        }
     }
 
     dcbaa = (UINT64 *)dcbaa_d.host;
-    spa = (UINT64 *)spa_d.host;
-    cr = (UINT32 *)cr_d.host;
+    scratch_array = (UINT64 *)spa_d.host;
+    cmd_ring = (UINT32 *)cr_d.host;
     erst = (UINT64 *)erst_d.host;
-    dcbaa[0] = scratchpads ? spa_d.dev : 0;
-    for (UINT32 i = 0; i < scratchpads; ++i) spa[i] = scratch[i].dev;
-    cr[0] = 0; cr[1] = 0; cr[2] = 0;
-    cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT) |
-            ((UINT32)slot_type << 16);
-    cr[4] = 0; cr[5] = 0; cr[6] = 0; cr[7] = 0;
-    cr[(CMD_TRBS - 1U) * 4U + 0U] = (UINT32)cr_d.dev;
-    cr[(CMD_TRBS - 1U) * 4U + 1U] = (UINT32)(cr_d.dev >> 32);
-    cr[(CMD_TRBS - 1U) * 4U + 2U] = 0;
-    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE |
-                                     (TRB_LINK << TRB_TYPE_SHIFT);
-    {
-        UINT32 *erst32 = (UINT32 *)erst;
-        erst32[0] = (UINT32)ev_d.dev;
-        erst32[1] = (UINT32)(ev_d.dev >> 32);
-        erst32[2] = EVENT_TRBS;
-        erst32[3] = 0U;
+    inctx = (UINT8 *)inctx_d.host;
+    outctx = (UINT8 *)outctx_d.host;
+
+    if (scratchpads) {
+        for (UINTN i = 0; i < scratchpads; ++i)
+            scratch_array[i] = scratch[i].dev;
+        dcbaa[0] = spa_d.dev;
     }
 
-    s = mw64(p, op + 0x30U, dcbaa_d.dev); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, op + 0x38U, 1U); ++writes; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, op + 0x18U, cr_d.dev | CRCR_RCS); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, ir + 8U, 1U); ++writes; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, ir + 0x10U, erst_d.dev & ERST_ADDR_MASK); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, ir + 0x18U, ev_d.dev & ERDP_ADDR_MASK); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mr32(p, ir, &iman); ++reads; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, ir, iman & ~IMAN_IE); ++writes; if (EFI_ERROR(s)) goto out;
-    s = mr32(p, op, &cmd); ++reads; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, op, (cmd & ~(CMD_INTE | CMD_HSEE)) | CMD_RUN); ++writes;
-    if (EFI_ERROR(s)) goto out;
-    halted = FALSE; running = TRUE;
-    s = wait_hch(p, op, FALSE, 10000U, &status, &reads); if (EFI_ERROR(s)) goto out;
+    /* Command ring: one segment, self-link at the final TRB. */
+    uefi_call_wrapper(BS->SetMem, 3, cmd_ring, 4096U, 0);
+    cmd_ring[1020] = (UINT32)cr_d.dev;
+    cmd_ring[1021] = (UINT32)(cr_d.dev >> 32);
+    cmd_ring[1022] = 0;
+    cmd_ring[1023] = (V32_TRB_LINK << 10) | 0x2U | 0x1U;
 
-    if (b.keyboard.root_port == 0xffU) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"ROOT PORT NUMBER", s); goto out; }
-    xhci_port = (UINT8)(b.keyboard.root_port + 1U);
-    s = v32_supported_protocol(p, hcc, xhci_port, &proto_major, &proto_minor, &slot_type, &reads); if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
-    portsc_off = op + 0x400U + ((UINT32)xhci_port - 1U) * 0x10U;
-    s = mr32(p, portsc_off, &status); ++reads; if (EFI_ERROR(s)) goto out;
-    if (!(status & V32_PORTSC_CCS)) { s = EFI_NOT_FOUND; v32_fail(u"PORT", u"NOT CONNECTED", s); goto out; }
-    speed = (UINT8)((status & V32_PORTSC_SPEED_MASK) >> V32_PORTSC_SPEED_SHIFT);
-    if (speed != V32_USB_SPEED_LOW && speed != V32_USB_SPEED_FULL) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"LS/FS ONLY", s); goto out; }
-    if (proto_major != 2U) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"USB2 PROTOCOL", s); goto out; }
-    Print(u"PORT: UEFI=%u XHCI=%u CONNECTED SPEED=%u PROTOCOL=%u.%u SLOT-TYPE=%u\r\n",
-          b.keyboard.root_port, xhci_port, speed, proto_major, proto_minor, slot_type);
+    /* Event ring segment table: one 16-TRB segment. */
+    uefi_call_wrapper(BS->SetMem, 3, ev_d.host, 4096U, 0);
+    erst[0] = ev_d.dev;
+    erst[1] = V32_EVENT_TRBS;
+    erst[2] = 0;
+    erst[3] = 0;
+    __sync_synchronize();
 
-    if (status & V32_PORTSC_PRC) {
-        s = v32_portsc_write(p, portsc_off, status, 0, V32_PORTSC_PR,
-                             V32_PORTSC_PRC, &writes);
-        if (EFI_ERROR(s)) goto out;
-        s = mr32(p, portsc_off, &status); ++reads;
-        if (EFI_ERROR(s) || (status & V32_PORTSC_PRC)) {
-            s = EFI_DEVICE_ERROR; v32_fail(u"PORT RESET", u"STALE PRC", s); goto out;
+    s = mw64(p, op + V32_DCBAAP_OFF, dcbaa_d.dev); writes += 2;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"DCBAAP", s); goto out; }
+    s = mw64(p, op + V32_CRCR_OFF, cr_d.dev | 1ULL); writes += 2;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"CRCR", s); goto out; }
+    s = mw32(p, op + V32_CONFIG_OFF, hcs1 & 0xffU); writes++;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"CONFIG", s); goto out; }
+    s = mw32(p, ir + V32_IMAN_OFF, 0); writes++;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"IMAN", s); goto out; }
+    s = mw32(p, ir + 0x24U, 0); writes++;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"IMOD", s); goto out; }
+    s = mw32(p, ir + V32_ERSTSZ_OFF, 1); writes++;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"ERSTSZ", s); goto out; }
+    s = mw64(p, ir + V32_ERSTBA_OFF, erst_d.dev); writes += 2;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"ERSTBA", s); goto out; }
+    s = mw64(p, ir + V32_ERDP_OFF, ev_d.dev); writes += 2;
+    if (EFI_ERROR(s)) { v32_fail(u"INIT", u"ERDP", s); goto out; }
+
+    s = v32_start(p, op, &reads, &writes);
+    if (EFI_ERROR(s)) { v32_fail(u"START", u"RUN", s); goto out; }
+    running = TRUE;
+    halted = FALSE;
+
+    /* Phase C: the only port considered is the UEFI-selected keyboard port. */
+    {
+        UINT32 port = h.keyboard.root_port;
+        UINT32 slot_cap;
+        UINT32 poff = op + V32_PORTSC_BASE + (port - 1U) * 0x10U;
+        s = v32_protocol_slot_type(p, hcc, port, &slot_cap, &reads);
+        if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
+        s = mr32(p, poff, &portsc); reads++;
+        if (EFI_ERROR(s)) { v32_fail(u"PORT", u"PORTSC", s); goto out; }
+        if (!(portsc & V32_PORT_CCS)) { s = EFI_NOT_FOUND; v32_fail(u"PORT", u"NOT CONNECTED", s); goto out; }
+        speed = (portsc & V32_PORT_SPEED_MASK) >> V32_PORT_SPEED_SHIFT;
+        if (speed != V32_USB_SPEED_LOW && speed != V32_USB_SPEED_FULL) {
+            s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"USB2 SPEED", s); goto out;
         }
-    }
-    s = v32_portsc_write(p, portsc_off, status, V32_PORTSC_PR, 0, 0, &writes);
-    if (EFI_ERROR(s)) goto out;
-    Print(u"PORT RESET: ASSERTED / WAITING\r\n");
-    s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_PORT_STATUS_CHANGE,
-                       xhci_port, 0, 0, NULL,
-                       &event_index, &event_cycle, &reads, &writes);
-    if (EFI_ERROR(s)) { v32_fail(u"PORT RESET", u"PORT STATUS CHANGE", s); goto out; }
-    s = mr32(p, portsc_off, &status); ++reads; if (EFI_ERROR(s)) goto out;
-    speed = (UINT8)((status & V32_PORTSC_SPEED_MASK) >> V32_PORTSC_SPEED_SHIFT);
-    if (!(status & V32_PORTSC_CCS) || !(status & V32_PORTSC_PED) ||
-        (status & V32_PORTSC_PR) || (status & V32_PORTSC_PLS_MASK) ||
-        !(status & V32_PORTSC_PRC) ||
-        (speed != V32_USB_SPEED_LOW && speed != V32_USB_SPEED_FULL)) {
-        s = EFI_DEVICE_ERROR; v32_fail(u"PORT RESET", u"POST RESET STATE", s); goto out;
-    }
-    Print(u"PORT RESET: PRC=1 PED=1 U0=1 LIVE-SPEED=%u PASS\r\n", speed);
+        Print(u"PORT=%u SLOT-TYPE=%u LIVE-SPEED=%u\r\n", port, slot_cap, speed);
 
-    s = mw32(p, db, 0U); ++writes;
-    if (EFI_ERROR(s)) goto out;
-    Print(u"ENABLE SLOT: COMMAND DOORBELL=0 PTR=%016lx SLOT-TYPE=%u\r\n", cr_d.dev, slot_type);
-    s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,
-                       0, cr_d.dev, 0, &slot_id,
-                       &event_index, &event_cycle, &reads, &writes);
-    if (EFI_ERROR(s)) { v32_fail(u"ENABLE SLOT", u"COMPLETION", s); goto out; }
-    Print(u"ENABLE SLOT: COMPLETION SUCCESS SLOT=%u PASS\r\n", slot_id);
+        /* A stale PRC must be acknowledged before the new reset. */
+        if (portsc & V32_PORT_PRC) {
+            s = mw32(p, poff, V32_PORT_PRC); writes++;
+            if (EFI_ERROR(s)) { v32_fail(u"PORT", u"CLEAR STALE PRC", s); goto out; }
+        }
+        s = mw32(p, poff, v32_port_write_base(portsc) | V32_PORT_PR); writes++;
+        if (EFI_ERROR(s)) { v32_fail(u"PORT", u"PORT RESET", s); goto out; }
 
-    s = dma_alloc(p, 1, &input_d); if (EFI_ERROR(s)) goto out;
-    s = dma_alloc(p, 1, &output_d); if (EFI_ERROR(s)) goto out;
-    s = dma_alloc(p, 1, &ep0_d); if (EFI_ERROR(s)) goto out;
-    if (!v32_dma_ok(&input_d, ac64) || !v32_dma_ok(&output_d, ac64) ||
-        !v32_dma_ok(&ep0_d, ac64)) {
-        s = EFI_UNSUPPORTED; v32_fail(u"ADDRESS", u"DMA ADDRESSING", s); goto out;
-    }
-    {
-        UINTN stride = ((hcc >> 2) & 1U) ? 64U : 32U;
-        UINT32 *input_ctx = (UINT32 *)input_d.host;
-        UINT32 *slot = (UINT32 *)((UINT8 *)input_d.host + stride);
-        UINT32 *epctx = (UINT32 *)((UINT8 *)input_d.host + stride * 2U);
-        uefi_call_wrapper(BS->SetMem, 3, input_d.host, 4096U, 0);
-        uefi_call_wrapper(BS->SetMem, 3, output_d.host, 4096U, 0);
+        {
+            UINT32 type, dw0, dw2, dw3;
+            UINT64 ptr;
+            s = v32_poll_event(p, ir, &ev_d, &ev_index, &ev_cycle,
+                               &type, &dw0, &dw2, &dw3, &ptr);
+            if (EFI_ERROR(s)) { v32_fail(u"PORT", u"RESET EVENT", s); goto out; }
+            if (type != V32_TRB_PORT_STATUS) {
+                s = EFI_DEVICE_ERROR; v32_fail(u"PORT", u"UNEXPECTED EVENT", s); goto out;
+            }
+            if (((dw3 >> 24) & 0xffU) != port) {
+                s = EFI_DEVICE_ERROR; v32_fail(u"PORT", u"RESET PORT ID", s); goto out;
+            }
+        }
+        s = mr32(p, poff, &portsc); reads++;
+        if (EFI_ERROR(s)) { v32_fail(u"PORT", u"POST RESET PORTSC", s); goto out; }
+        speed = (portsc & V32_PORT_SPEED_MASK) >> V32_PORT_SPEED_SHIFT;
+        if (!(portsc & V32_PORT_CCS) || (portsc & V32_PORT_PR) ||
+            !(portsc & V32_PORT_PED) ||
+            ((portsc & V32_PORT_PLS_MASK) >> 5) != V32_PORT_PLS_U0 ||
+            !(portsc & V32_PORT_PRC) ||
+            (speed != V32_USB_SPEED_LOW && speed != V32_USB_SPEED_FULL)) {
+            s = EFI_DEVICE_ERROR; v32_fail(u"PORT", u"POST RESET STATE", s); goto out;
+        }
+        s = mw32(p, poff, V32_PORT_PRC); writes++;
+        if (EFI_ERROR(s)) { v32_fail(u"PORT", u"CLEAR RESET CHANGE", s); goto out; }
+
+        /* Enable Slot. */
+        cmd_ring[cmd_index * 4U + 0U] = 0;
+        cmd_ring[cmd_index * 4U + 1U] = 0;
+        cmd_ring[cmd_index * 4U + 2U] = 0;
+        cmd_ring[cmd_index * 4U + 3U] = (V32_TRB_ENABLE_SLOT << 10) |
+                                          ((slot_cap & 0x1fU) << 16) |
+                                          cmd_cycle;
+        __sync_synchronize();
+        command_addr = v32_trb_ptr(&cr_d, cmd_index);
+        s = mw32(p, db + V32_DB0_OFF, 0); writes++;
+        if (EFI_ERROR(s)) { v32_fail(u"ENABLE SLOT", u"DOORBELL", s); goto out; }
+        s = v32_expect_command(p, ir, &ev_d, &ev_index, &ev_cycle,
+                                command_addr, 0, &slot);
+        if (EFI_ERROR(s) || !slot) { if (!EFI_ERROR(s)) s = EFI_DEVICE_ERROR; v32_fail(u"ENABLE SLOT", u"COMPLETION", s); goto out; }
+        Print(u"ENABLE SLOT: SLOT=%u PASS\r\n", slot);
+        cmd_index++;
+
+        /* Fresh Input/Output contexts and EP0 ring. */
+        uefi_call_wrapper(BS->SetMem, 3, inctx, 4096U, 0);
+        uefi_call_wrapper(BS->SetMem, 3, outctx, 4096U, 0);
         uefi_call_wrapper(BS->SetMem, 3, ep0_d.host, 4096U, 0);
-        input_ctx[0] = 0U;
-        input_ctx[1] = (1U << 0) | (1U << 1);
-        slot[0] = (1U << 27) | ((UINT32)speed << 20);
-        slot[1] = ((UINT32)xhci_port << 16);
-        epctx[0] = 0U;
-        epctx[1] = (3U << 1) | (4U << 3) | (8U << 16);
-        epctx[2] = (UINT32)ep0_d.dev | 1U;
-        epctx[3] = (UINT32)(ep0_d.dev >> 32);
-        epctx[4] = 8U;
-        ep0 = (UINT32 *)ep0_d.host;
-        ep0[(4096U / 4U) - 4U] = (UINT32)ep0_d.dev;
-        ep0[(4096U / 4U) - 3U] = (UINT32)(ep0_d.dev >> 32);
-        ep0[(4096U / 4U) - 2U] = 0U;
-        ep0[(4096U / 4U) - 1U] = TRB_CYCLE | TRB_LINK_TOGGLE |
-                                  (TRB_LINK << TRB_TYPE_SHIFT);
-        dcbaa[slot_id] = output_d.dev;
-    }
+        {
+            UINT32 *ic = (UINT32 *)inctx;
+            UINT32 *slotc = (UINT32 *)(inctx + ctxsz);
+            UINT32 *epc = (UINT32 *)(inctx + ctxsz * 2U);
+            UINT32 speed_now = (portsc & V32_PORT_SPEED_MASK) >> V32_PORT_SPEED_SHIFT;
+            UINT32 ep_dw1 = (3U << 1) | (V32_EP_TYPE_CONTROL << 3) | (8U << 16);
+            UINT64 ep_ring = ep0_d.dev | 1ULL;
 
-    cr[4] = (UINT32)input_d.dev;
-    cr[5] = (UINT32)(input_d.dev >> 32);
-    cr[6] = 0U;
-    cr[7] = TRB_CYCLE | (V32_TRB_ADDRESS_DEVICE << TRB_TYPE_SHIFT) |
-            ((UINT32)slot_id << 24);
-    s = mw32(p, db, 0U);
-    ++writes;
-    if (EFI_ERROR(s)) goto out;
-    Print(u"ADDRESS DEVICE: COMMAND DOORBELL=0 INPUT=%016lx EP0-MPS=8 AVG-TRB=8\r\n",
-          input_d.dev);
-    s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,
-                       0, cr_d.dev + 16U, slot_id, NULL,
-                       &event_index, &event_cycle, &reads, &writes);
-    if (EFI_ERROR(s)) { v32_fail(u"ADDRESS", u"COMPLETION", s); goto out; }
-    {
-        UINTN stride = ((hcc >> 2) & 1U) ? 64U : 32U;
-        UINT32 *out_slot = (UINT32 *)output_d.host;
-        UINT32 d3 = out_slot[3];
-        UINT32 state = (d3 >> 27) & 0x1fU;
-        UINT32 addr = d3 & 0xffU;
-        if (state != 2U || addr == 0U) {
-            s = EFI_DEVICE_ERROR; v32_fail(u"ADDRESS", u"ADDRESSED STATE", s); goto out;
+            ic[0] = 0;
+            ic[1] = V32_CTX_SLOT_ADD | V32_CTX_EP0_ADD;
+            slotc[0] = (speed_now << 20) | (1U << 27);
+            slotc[1] = port << 16;
+            slotc[2] = 0;
+            slotc[3] = 0;
+            epc[0] = 0;
+            epc[1] = ep_dw1;
+            epc[2] = (UINT32)ep_ring;
+            epc[3] = (UINT32)(ep_ring >> 32);
+            epc[4] = 8U;
+            epc[5] = 0;
         }
-        Print(u"ADDRESS DEVICE: SUCCESS STATE=ADDRESSED(%u) USB-ADDR=%u PASS\r\n", state, addr);
-        (void)stride;
+        {
+            UINT32 *r = (UINT32 *)ep0_d.host;
+            r[0] = 0; r[1] = 0; r[2] = 0; r[3] = 0;
+        }
+        dcbaa[slot] = outctx_d.dev;
+        __sync_synchronize();
+
+        /* Address Device. */
+        cmd_ring[cmd_index * 4U + 0U] = (UINT32)inctx_d.dev;
+        cmd_ring[cmd_index * 4U + 1U] = (UINT32)(inctx_d.dev >> 32);
+        cmd_ring[cmd_index * 4U + 2U] = 0;
+        cmd_ring[cmd_index * 4U + 3U] = (V32_TRB_ADDRESS_DEVICE << 10) |
+                                          (slot << 24) | cmd_cycle;
+        __sync_synchronize();
+        command_addr = v32_trb_ptr(&cr_d, cmd_index);
+        s = mw32(p, db + V32_DB0_OFF, 0); writes++;
+        if (EFI_ERROR(s)) { v32_fail(u"ADDRESS DEVICE", u"DOORBELL", s); goto out; }
+        s = v32_expect_command(p, ir, &ev_d, &ev_index, &ev_cycle,
+                                command_addr, slot, NULL);
+        if (EFI_ERROR(s)) { v32_fail(u"ADDRESS DEVICE", u"COMPLETION", s); goto out; }
+
+        {
+            UINT32 *os = (UINT32 *)outctx;
+            UINT32 state = (os[3] >> 27) & 0x1fU;
+            UINT32 address = os[3] & 0xffU;
+            if (state != V32_SLOT_STATE_ADDRESSED || address == 0) {
+                s = EFI_DEVICE_ERROR; v32_fail(u"ADDRESS DEVICE", u"OUTPUT SLOT STATE", s); goto out;
+            }
+        }
+        Print(u"ADDRESS DEVICE: SLOT=%u STATE=ADDRESSED PASS\r\n", slot);
     }
 
-    s = mr32(p, op, &cmd); ++reads; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, op, cmd & ~(CMD_RUN | CMD_INTE | CMD_HSEE)); ++writes;
-    if (EFI_ERROR(s)) goto out;
+    /* Gate 6 ends immediately after Address Device. Safe teardown follows. */
+    s = v32_halt_and_reset(p, op, &reads, &writes);
+    if (EFI_ERROR(s)) {
+        v32_fail(u"TEARDOWN", u"HALT RESET", s);
+        fatal_running();
+    }
     running = FALSE;
-    s = wait_hch(p, op, TRUE, 10000U, &status, &reads);
-    if (EFI_ERROR(s)) { v32_fail(u"HALT", u"CONFIRM HCH", s); v32_fatal_running(&reads, &writes); }
     halted = TRUE;
-    s = reset_xhci(p, op, &cmd, &status, &reads, &writes); if (EFI_ERROR(s)) goto out;
-    if (!(status & STS_HCH)) { s = EFI_DEVICE_ERROR; goto out; }
-    s = mw64(p, op + 0x18U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, op + 0x30U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, op + 0x38U, 0); ++writes; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, ir + 8U, 0); ++writes; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, ir + 0x10U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, ir + 0x18U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
-    refs_cleared = TRUE;
+
+    /* Remove every controller reference before releasing DMA. */
+    (void)mw64(p, op + V32_CRCR_OFF, 0);
+    (void)mw64(p, op + V32_DCBAAP_OFF, 0);
+    (void)mw32(p, op + V32_CONFIG_OFF, 0);
+    (void)mw64(p, ir + V32_ERSTBA_OFF, 0);
+    (void)mw64(p, ir + V32_ERDP_OFF, 0);
+    (void)mw32(p, ir + V32_ERSTSZ_OFF, 0);
 
 out:
-    if (EFI_ERROR(s) && !halted && (running || disconnected)) v32_fatal_running(&reads, &writes);
-    if (halted && p && !refs_cleared) {
-        ts = mw64(p, op + 0x18U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        ts = mw64(p, op + 0x30U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        ts = mw32(p, op + 0x38U, 0); ++writes; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        ts = mw32(p, ir + 8U, 0); ++writes; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        ts = mw64(p, ir + 0x10U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        ts = mw64(p, ir + 0x18U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        refs_cleared = TRUE;
+    if (running) {
+        /* Never release controller-referenced DMA while RUN state is uncertain. */
+        fatal_running();
     }
-    if (halted && p) {
+    if (p && halted) {
+        (void)mw64(p, op + V32_CRCR_OFF, 0);
+        (void)mw64(p, op + V32_DCBAAP_OFF, 0);
+        (void)mw32(p, op + V32_CONFIG_OFF, 0);
+        (void)mw64(p, ir + V32_ERSTBA_OFF, 0);
+        (void)mw64(p, ir + V32_ERDP_OFF, 0);
+        (void)mw32(p, ir + V32_ERSTSZ_OFF, 0);
+    }
+
+    if (dma_live && p && halted) {
         if (scratch) {
-            for (UINT32 i = 0; i < scratchpads; ++i) dma_free(p, &scratch[i]);
+            for (UINTN i = 0; i < scratchpads; ++i)
+                (void)dma_free(p, &scratch[i]);
             FreePool(scratch);
+            scratch = NULL;
         }
-        dma_free(p, &ep0_d); dma_free(p, &output_d); dma_free(p, &input_d);
-        dma_free(p, &erst_d); dma_free(p, &ev_d); dma_free(p, &cr_d);
-        dma_free(p, &spa_d); dma_free(p, &dcbaa_d);
+        (void)dma_free(p, &ep0_d);
+        (void)dma_free(p, &outctx_d);
+        (void)dma_free(p, &inctx_d);
+        (void)dma_free(p, &erst_d);
+        (void)dma_free(p, &ev_d);
+        (void)dma_free(p, &cr_d);
+        (void)dma_free(p, &spa_d);
+        (void)dma_free(p, &dcbaa_d);
+        dma_live = FALSE;
     }
-    if (p && disconnected && attrs_changed_here) {
-        ts = uefi_call_wrapper(p->Attributes, 4, p,
-                               EfiPciIoAttributeOperationDisable,
-                               attrs_changed, NULL);
-        if (EFI_ERROR(ts) && !EFI_ERROR(s)) s = ts;
-    }
-    if (cpu_interrupts_disabled) {
-        v32_restore_cpu_interrupts(saved_rflags);
-        cpu_interrupts_disabled = FALSE;
-    }
-    if (EFI_ERROR(s)) {
-        Print(u"\r\nV32 GATE 6: FAIL RESULT=%r\r\n", s);
-        Print(u"FAIL STAGE=%s OP=%s STATUS=%r\r\n", fail_stage, fail_op, fail_status);
-    } else {
-        Print(u"\r\nV32 GATE 6: PASS\r\n");
-        Print(u"UEFI DISCOVERY=1 QUIESCE=1 PORT RESET=1 ENABLE SLOT=1 ADDRESS DEVICE=1\r\n");
-        Print(u"COMMANDS=2 COMMAND-DOORBELLS=2 CPU-INTERRUPT-DELIVERY=DISABLED / LS+FS ONLY\r\n");
-        Print(u"INITIAL EP0 MPS=8 / POST-ADDRESS SLOT STATE=ADDRESSED\r\n");
-        Print(u"RESET RECOVERY + POINTER CLEAR + DMA RELEASE=PASS\r\n");
+    if (p && pci_changed && halted)
+        (void)uefi_call_wrapper(p->Attributes, 4, p,
+                                 EfiPciIoAttributeOperationDisable,
+                                 pci_enabled, NULL);
+    if (interrupts_disabled) {
+        v32_restore_interrupts(saved_flags);
+        interrupts_disabled = FALSE;
     }
     Print(u"MMIO READS=%u WRITES=%u RESULT=%r\r\n", reads, writes, s);
-    v32_press_key(st);
+    uefi_call_wrapper(BS->Stall, 1, 30000000);
     return s;
 }
