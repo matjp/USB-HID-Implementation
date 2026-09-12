@@ -236,7 +236,6 @@ static EFI_STATUS v32_discover(EFI_HANDLE image, V32_HANDOFF *h,
                 return s;
             }
         }
-
         h->keyboard.kind = 1U;
         h->keyboard.root_port = root;
         h->keyboard.interface_number = iface.InterfaceNumber;
@@ -465,16 +464,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     Print(u"CONTROLLER: %04x:%02x:%02x.%x %04x:%04x\r\n",
           b.pci_segment, b.pci_bus, b.pci_device, b.pci_function,
           b.pci_vendor, b.pci_device_id);
-
     if (b.magic != V32_HANDOFF_MAGIC || b.version != V32_HANDOFF_VERSION ||
-        b.size != sizeof(b) || b.device_count != 1U || b.keyboard.kind != 1U)
-    {
+        b.size != sizeof(b) || b.device_count != 1U || b.keyboard.kind != 1U) {
         s = EFI_INVALID_PARAMETER;
         v32_fail(u"HANDOFF", u"VALIDATION", s);
         goto out;
     }
 
-    /* No active xHCI MMIO reconfiguration occurs before this succeeds. */
     s = uefi_call_wrapper(BS->DisconnectController, 3, controller, NULL, NULL);
     if (EFI_ERROR(s)) { v32_fail(u"QUIESCE", u"DISCONNECT CONTROLLER", s); goto out; }
     disconnected = TRUE;
@@ -500,7 +496,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
           (((bar0 >> 1) & 3U) == 2U) ? (((UINT64)bar1 << 32) | (bar0 & ~0xfU)) : (UINT64)(bar0 & ~0xfU),
           (((bar0 >> 1) & 3U) == 2U) ? u"64" : u"32");
 
-    /* V29/V30/V31 cumulative halt/reset, DMA, ring and run setup. */
     s = mr32(p, 0, &cap); ++reads; if (EFI_ERROR(s)) goto out;
     op = cap & 0xffU;
     {
@@ -527,8 +522,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     xpage = (UINTN)1U << (12U + shift);
     if (xpage > 0x100000U) { s = EFI_UNSUPPORTED; goto out; }
     scratch_pages = xpage / 4096U;
+    if (!max_slots || scratchpads > MAX_SCRATCHPADS) { s = EFI_UNSUPPORTED; goto out; }
     Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u PAGE=%u AC64=%u CTXSZ=%u\r\n",
-          max_slots, scratchpads, (UINT32)xpage, ac64 ? 1U : 0U,
+          max_slots, scratchpads, (UINT32)xhci_page, ac64 ? 1U : 0U,
           ((hcc >> 2) & 1U) ? 64U : 32U);
 
     s = mr32(p, op + 4U, &status); ++reads; if (EFI_ERROR(s)) goto out;
@@ -552,11 +548,10 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         s = uefi_call_wrapper(BS->AllocatePool, 3, EfiBootServicesData,
                               scratchpads * sizeof(struct dma_obj), (VOID **)&scratch);
         if (EFI_ERROR(s)) goto out;
-        uefi_call_wrapper(BS->SetMem, 3, scratch,
-                          scratchpads * sizeof(struct dma_obj), 0);
+        uefi_call_wrapper(BS->SetMem, 3, scratch, scratchpads * sizeof(struct dma_obj), 0);
         for (UINT32 i = 0; i < scratchpads; ++i) {
             s = dma_alloc(p, scratch_pages, &scratch[i]); if (EFI_ERROR(s)) goto out;
-            if ((scratch[i].dev & ((UINT64)xpage - 1ULL)) || !v32_dma_ok(&scratch[i], ac64)) {
+            if ((scratch[i].dev & ((UINT64)xhci_page - 1ULL)) || !v32_dma_ok(&scratch[i], ac64)) {
                 s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"SCRATCH ADDRESS", s); goto out;
             }
         }
@@ -575,13 +570,11 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     for (UINT32 i = 0; i < scratchpads; ++i) spa[i] = scratch[i].dev;
     cr[0] = 0; cr[1] = 0; cr[2] = 0;
     cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT);
-    /* TRB 1 remains invalid until Enable Slot has completed. */
     cr[4] = 0; cr[5] = 0; cr[6] = 0; cr[7] = 0;
     cr[(CMD_TRBS - 1U) * 4U + 0U] = (UINT32)cr_d.dev;
     cr[(CMD_TRBS - 1U) * 4U + 1U] = (UINT32)(cr_d.dev >> 32);
     cr[(CMD_TRBS - 1U) * 4U + 2U] = 0;
-    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE |
-                                     (TRB_LINK << TRB_TYPE_SHIFT);
+    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE | (TRB_LINK << TRB_TYPE_SHIFT);
     erst[0] = ev_d.dev; erst[1] = 0; erst[2] = EVENT_TRBS; erst[3] = 0;
 
     s = mw64(p, op + 0x30U, dcbaa_d.dev); writes += 2; if (EFI_ERROR(s)) goto out;
@@ -608,6 +601,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     s = v32_supported_protocol(p, hcc, b.keyboard.root_port,
                                 &proto_major, &proto_minor, &slot_type, &reads);
     if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
+    if (proto_major != 2U) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"USB2 PROTOCOL", s); goto out; }
     Print(u"PORT=%u CONNECTED SPEED=%u PROTOCOL=%u.%u SLOT-TYPE=%u\r\n",
           b.keyboard.root_port, speed, proto_major, proto_minor, slot_type);
 
@@ -637,16 +631,15 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     }
     Print(u"PORT RESET: PRC=1 PED=1 U0=1 LIVE-SPEED=%u PASS\r\n", speed);
 
-    /* Enable Slot is deliberately submitted before publishing Address Device. */
-    s = mw32(p, db, 0U); ++writes; if (EFI_ERROR(s)) goto out;
-    Print(u"ENABLE SLOT: COMMAND PTR=%016lx SLOT-TYPE=%u\r\n", cr_d.dev, slot_type);
+    s = mw32(p, db, 0U); ++writes;
+    if (EFI_ERROR(s)) goto out;
+    Print(u"ENABLE SLOT: COMMAND DOORBELL=0 PTR=%016lx SLOT-TYPE=%u\r\n", cr_d.dev, slot_type);
     s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,
                        0, cr_d.dev, (UINT8)max_slots, &slot_id,
                        &event_index, &event_cycle, &reads, &writes);
     if (EFI_ERROR(s)) { v32_fail(u"ENABLE SLOT", u"COMPLETION", s); goto out; }
     Print(u"ENABLE SLOT: COMPLETION SUCCESS SLOT=%u PASS\r\n", slot_id);
 
-    /* Allocate fresh Input/Output contexts and a fresh EP0 transfer ring. */
     s = dma_alloc(p, 1, &input_d); if (EFI_ERROR(s)) goto out;
     s = dma_alloc(p, 1, &output_d); if (EFI_ERROR(s)) goto out;
     s = dma_alloc(p, 1, &ep0_d); if (EFI_ERROR(s)) goto out;
@@ -654,9 +647,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         !v32_dma_ok(&ep0_d, ac64)) {
         s = EFI_UNSUPPORTED; v32_fail(u"ADDRESS", u"DMA ADDRESSING", s); goto out;
     }
-    input = (UINT32 *)input_d.host;
-    output = (UINT32 *)output_d.host;
-    ep0 = (UINT32 *)ep0_d.host;
     {
         UINTN stride = ((hcc >> 2) & 1U) ? 64U : 32U;
         UINT32 *slot = (UINT32 *)((UINT8 *)input_d.host + stride);
@@ -664,6 +654,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         uefi_call_wrapper(BS->SetMem, 3, input_d.host, 4096U, 0);
         uefi_call_wrapper(BS->SetMem, 3, output_d.host, 4096U, 0);
         uefi_call_wrapper(BS->SetMem, 3, ep0_d.host, 4096U, 0);
+        input = (UINT32 *)input_d.host;
+        ep0 = (UINT32 *)ep0_d.host;
         input[0] = 0U;
         input[1] = (1U << 0) | (1U << 1);
         slot[0] = (1U << 27) | ((UINT32)speed << 20);
@@ -681,16 +673,15 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         dcbaa[slot_id] = output_d.dev;
     }
 
-    /* Only after Enable Slot completion does TRB 1 become valid. */
     cr[4] = (UINT32)input_d.dev;
     cr[5] = (UINT32)(input_d.dev >> 32);
     cr[6] = 0U;
     cr[7] = TRB_CYCLE | (V32_TRB_ADDRESS_DEVICE << TRB_TYPE_SHIFT) |
             ((UINT32)slot_id << 24);
-    s = mw32(p, db + ((UINT32)slot_id * 4U), 0U); ++writes;
+    s = mw32(p, db, 0U); ++writes;
     if (EFI_ERROR(s)) goto out;
-    Print(u"ADDRESS DEVICE: INPUT=%016lx EP0-MPS=8 AVG-TRB=8 DOORBELL=%u\r\n",
-          input_d.dev, slot_id);
+    Print(u"ADDRESS DEVICE: COMMAND DOORBELL=0 INPUT=%016lx EP0-MPS=8 AVG-TRB=8\r\n",
+          input_d.dev);
     s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,
                        0, cr_d.dev + 16U, slot_id, NULL,
                        &event_index, &event_cycle, &reads, &writes);
@@ -750,14 +741,13 @@ out:
                                attrs_changed, NULL);
         if (EFI_ERROR(ts) && !EFI_ERROR(s)) s = ts;
     }
-
     if (EFI_ERROR(s)) {
         Print(u"\r\nV32 GATE 6: FAIL RESULT=%r\r\n", s);
         Print(u"FAIL STAGE=%s OP=%s STATUS=%r\r\n", fail_stage, fail_op, fail_status);
     } else {
         Print(u"\r\nV32 GATE 6: PASS\r\n");
         Print(u"UEFI DISCOVERY=1 QUIESCE=1 PORT RESET=1 ENABLE SLOT=1 ADDRESS DEVICE=1\r\n");
-        Print(u"COMMANDS=2 DOORBELLS=2 CPU-INTERRUPTS=0 / LS+FS ONLY\r\n");
+        Print(u"COMMANDS=2 COMMAND-DOORBELLS=2 CPU-INTERRUPTS=0 / LS+FS ONLY\r\n");
         Print(u"INITIAL EP0 MPS=8 / POST-ADDRESS SLOT STATE=ADDRESSED\r\n");
         Print(u"RESET RECOVERY + POINTER CLEAR + DMA RELEASE=PASS\r\n");
     }
