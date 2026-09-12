@@ -38,7 +38,7 @@ Exit criteria:
 
 ## Gate 2 — UEFI HID handoff
 
-V28 validates the versioned UEFI -> service discovery snapshot before active xHCI reconfiguration. UEFI supplies controller identity/capabilities (including the capability/offset/page-size values needed by the service) and only keyboard/mouse discovery facts. V28 is read-only with respect to xHCI MMIO and DMA.
+V28 validates the versioned UEFI -> service discovery snapshot before active xHCI reconfiguration. UEFI supplies controller identity/capabilities and only keyboard/mouse discovery facts. V28 is read-only with respect to xHCI MMIO and DMA.
 
 Exit criteria:
 
@@ -83,27 +83,27 @@ Reference: Intel xHCI Specification, command completion/event-ring requirements;
 
 Gate 6 is cumulative. V32 must retain the complete proven V28/V29/V30/V31 implementation and add the first live USB-device operations. The target is one pre-connected USB HID boot-protocol keyboard interface. The physical device may be a composite receiver, including a combined wireless keyboard/mouse dongle; only the keyboard interface is exercised in this gate.
 
-Gate 6 deliberately targets a keyboard that enumerates through the controller's USB2-compatible path at Low Speed or Full Speed. High-Speed and SuperSpeed device operation, including USB3-specific warm-reset handling, are outside this gate. The implementation uses the live xHCI port state to determine the actual speed; it does not assume that a physical USB3-capable connector implies a SuperSpeed keyboard.
+Gate 6 deliberately targets a keyboard that enumerates through the controller's USB2-compatible path at Low Speed or Full Speed. High-Speed and SuperSpeed device operation, including USB3-specific warm-reset handling, are outside this gate. The implementation uses live xHCI port state to determine the actual speed; it does not assume that a physical USB3-capable connector implies a SuperSpeed keyboard.
 
 The Gate 6 EFI image has two explicit logical stages:
 
 `UEFI discovery producer -> bounded handoff -> UEFI USB-stack quiesce -> V32 bridge consumer -> fresh xHCI state`
 
-The UEFI discovery producer is authoritative and may use `EFI_USB_IO_PROTOCOL` and USB device paths to select the keyboard and populate the handoff. Before any active xHCI MMIO reconfiguration, the producer must stop the UEFI USB host-controller/bus-driver stack for the selected xHCI controller using `DisconnectController()`. The V32 bridge consumer then consumes the bounded handoff without enumerating `EFI_USB_IO_PROTOCOL` handles or performing a second keyboard-discovery algorithm.
+The UEFI discovery producer is authoritative and may use `EFI_USB_IO_PROTOCOL` and USB device paths to select the keyboard and populate the handoff. Before any active xHCI MMIO reconfiguration, it must stop the UEFI USB host-controller/bus-driver stack for the selected xHCI controller using `DisconnectController()`. The V32 bridge consumer then consumes the bounded handoff without enumerating `EFI_USB_IO_PROTOCOL` handles or performing a second keyboard-discovery algorithm.
 
 The bridge receives a bridge-local copy of the selected device facts before active xHCI reconfiguration. The handoff never transfers UEFI-created rings, contexts, DMA buffers, slot IDs, device addresses, or controller run state. The bridge creates fresh xHCI state itself.
 
-The handoff's EP0 maximum packet-size field must be normalized to the actual packet size required by the xHCI Endpoint 0 Context. A raw USB descriptor encoding must not be copied blindly into the xHCI context.
-
-The UEFI producer must identify the PCI controller path associated with the selected USB device. The bridge may enumerate PCI xHCI controllers, but it must bind to the controller identified by the handoff rather than selecting the first matching xHCI controller. No fixed machine-specific BDF is allowed.
+The UEFI producer must identify the PCI controller path associated with the selected USB device. The bridge may enumerate PCI xHCI controllers, but it must bind to the controller identified by the handoff rather than selecting the first matching controller. No fixed machine-specific BDF is allowed.
 
 The controller handle used for `DisconnectController()` and the PCI I/O handle used for xHCI MMIO/DMA must be validated as the same controller.
 
+For Gate 6 Address Device, the bridge must use the xHCI-defined default EP0 Max Packet Size of 8 bytes for the selected Low-/Full-Speed device. The UEFI `bMaxPacketSize0` value is retained only as discovery/evidence for later descriptor/configuration work; V32 must not require a pre-Address-Device descriptor transfer or substitute that later actual value into the initial EP0 Context.
+
 The cumulative V32 sequence is:
 
-`UEFI discovery -> handoff validation/normalization -> DisconnectController(quiesce) -> bind corresponding xHCI controller -> halt -> reset -> CNR clear -> validate caps -> allocate/map DMA -> program CONFIG/DCBAAP/CRCR/primary event ring -> start xHCI -> verify HCH=0 -> select handoff root port -> verify connected -> determine live speed -> USB2-compatible port reset -> consume/validate port-status change -> verify Low/Full Speed post-reset state -> Enable Slot -> completion -> allocate/initialize fresh device contexts -> DCBAA[slot] -> Address Device -> completion -> validate addressed/default state -> halt/reset -> clear controller pointers -> release DMA`
+`UEFI discovery -> handoff validation -> DisconnectController(quiesce) -> bind corresponding xHCI controller -> PCI attribute validation -> halt -> reset -> CNR clear -> validate caps -> allocate/map DMA -> program CONFIG/DCBAAP/CRCR/primary event ring -> start xHCI -> verify HCH=0 -> select handoff root port -> verify connected -> determine live speed -> USB2-compatible port reset -> consume/validate port-status change -> verify Low/Full Speed post-reset state -> Enable Slot -> completion -> allocate/initialize fresh device contexts -> DCBAA[slot] -> initial EP0 Max Packet Size=8 -> Address Device -> completion -> validate addressed/default state -> halt/reset -> clear controller pointers -> release DMA -> restore PCI attributes`
 
-This first cumulative V32 stops after Address Device. Descriptors, SET_CONFIGURATION, Configure Endpoint, HID Set Protocol, keyboard reports, mouse traffic, hubs, hot-plug, MSI/MSI-X, CPU interrupt handlers, and continuous report polling remain later work.
+This first cumulative V32 stops after Address Device. Descriptors, `bMaxPacketSize0` re-evaluation, SET_CONFIGURATION, Configure Endpoint, HID Set Protocol, keyboard reports, mouse traffic, hubs, hot-plug, MSI/MSI-X, CPU interrupt handlers, and continuous report polling remain later work.
 
 ### Gate 6 implementation-review requirements
 
@@ -112,16 +112,18 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 1. **Cumulative reuse:** V32 must contain the proven V29 halt/reset/DMA/ring initialization, V30 RUN/halt/recovery, and V31 Enable Slot/event-ring completion behavior rather than reimplementing isolated substitutes.
 2. **UEFI boundary:** discovery occurs in the producer stage before active xHCI reconfiguration; the producer identifies the selected keyboard interface, root port, and controller path; the bridge consumes that record without scanning `EFI_USB_IO_PROTOCOL` itself. Do not hard-code port 4 or a machine-specific PCI BDF.
 3. **Ownership handoff:** all UEFI USB discovery reads complete before `DisconnectController()`; the selected controller is disconnected with `DriverImageHandle=NULL` and `ChildHandle=NULL`; the disconnect succeeds; no active xHCI MMIO/DMA reconfiguration occurs before successful quiesce.
-4. **Handoff contract:** magic/version/size/bounds are validated; required fields are usable; the selected keyboard is unambiguous; controller identity is present and matchable; EP0 packet size is normalized before context construction; optional unavailable fields are not guessed.
-5. **Controller binding:** the controller handle used for UEFI disconnect and the PCI I/O handle used by the bridge refer to the same controller; multiple matching xHCI controllers do not cause arbitrary first-match selection.
-6. **Port protocol/speed:** the selected port's live PORTSC state is authoritative after controller start. Gate 6 accepts Low Speed or Full Speed only. High-Speed and SuperSpeed are rejected rather than introducing a second general-speed or USB3 reset path.
-7. **Port reset/state:** correct USB2-compatible PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
-8. **Slot/context:** context-size selection from HCCPARAMS1, 64-byte/32-byte context layout as applicable, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
-9. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, normalized Max Packet Size 0, Transfer Ring Dequeue Pointer, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
-10. **DMA:** all contexts, rings, and controller-referenced buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared.
-11. **Failure safety:** after any command submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
-12. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout V32; poll the event ring directly as in V31.
-13. **No UEFI runtime-state reuse:** the bridge starts with a fresh controller state and does not depend on UEFI slot IDs, rings, contexts, DMA buffers, or run state.
+4. **PCI state:** required Memory and Bus Master attributes are supported/enabled through `EFI_PCI_IO_PROTOCOL.Attributes()`; the bridge records any attributes it changes and restores them on safe teardown.
+5. **Handoff contract:** magic/version/size/bounds are validated; required fields are usable; the selected keyboard is unambiguous; controller identity is present and matchable; the later descriptor `bMaxPacketSize0` value is not confused with the initial Address Device EP0 size; optional unavailable fields are not guessed.
+6. **Controller binding:** the controller handle used for UEFI disconnect and the PCI I/O handle used by the bridge refer to the same controller; multiple matching xHCI controllers do not cause arbitrary first-match selection.
+7. **BAR/MMIO:** valid 32-bit or 64-bit MMIO BARs are accepted; the MMIO base is derived from PCI configuration; no hard-coded physical address is used; 64-bit xHCI pointer registers use the proven conservative access method.
+8. **Port protocol/speed:** the selected port's live PORTSC state is authoritative after controller start. Gate 6 accepts Low Speed or Full Speed only. High-Speed and SuperSpeed are rejected.
+9. **Port reset/state:** correct USB2-compatible PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
+10. **Slot/context:** context-size selection from HCCPARAMS1, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
+11. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, initial EP0 Max Packet Size = 8 bytes, Transfer Ring Dequeue Pointer with DCS=1, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
+12. **DMA:** all contexts, rings, and controller-referenced buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared.
+13. **Failure safety:** after any command submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
+14. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout V32; poll the event ring directly as in V31.
+15. **No UEFI runtime-state reuse:** the bridge starts with fresh controller/device state and does not depend on UEFI slot IDs, rings, contexts, DMA buffers, or USB address state.
 
 ### Gate 6 acceptance criteria
 
@@ -136,11 +138,13 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 - The post-reset live PORTSC speed is used for Slot Context construction.
 - Enable Slot completion returns a valid fresh Slot ID.
 - Fresh device contexts are allocated and linked through the DCBAA.
+- The initial Address Device EP0 Max Packet Size is exactly 8 bytes.
 - Address Device completes successfully and the output device context reaches the expected addressed/default state.
 - No hard-coded target port or PCI BDF is used.
-- No mouse traffic, descriptor transfers, endpoint configuration, HID protocol change, hubs, hot-plug, CPU interrupts, MSI/MSI-X, or continuous report polling is introduced.
+- No descriptor transfer, SET_CONFIGURATION, Configure Endpoint, Evaluate Context, HID protocol change, mouse traffic, hubs, hot-plug, CPU interrupts, MSI/MSI-X, or continuous report polling is introduced.
 - On every error path, DMA mappings remain live until controller references are safely eliminated.
 - The controller can be halted/reset and all controller pointers cleared before DMA release.
+- PCI attributes changed by the bridge are restored after safe teardown.
 
 **Gate 6 status: DESIGN RESTARTED. V32 source and obsolete V32 debug workflow have been removed. No V32 implementation is authorized until the design review above passes.**
 
