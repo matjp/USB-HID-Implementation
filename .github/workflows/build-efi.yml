@@ -1,6 +1,8 @@
 name: Build EFI Test
 # EFI source provenance is tracked separately from workflow/documentation commits.
 # V28 compatibility header is maintained under efi/usb_io_compat.h.
+# Gate 6 boundary: UEFI USB/device-path access belongs only to the handoff producer;
+# the bridge consumes the completed handoff after DisconnectController().
 
 on:
   push:
