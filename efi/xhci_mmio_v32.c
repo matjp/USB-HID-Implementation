@@ -81,6 +81,19 @@ static void v32_fail(const CHAR16 *stage, const CHAR16 *op, EFI_STATUS s)
     fail(stage, op, s);
 }
 
+static UINT64 v32_disable_cpu_interrupts(void)
+{
+    UINT64 flags;
+    __asm__ __volatile__("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+
+static void v32_restore_cpu_interrupts(UINT64 flags)
+{
+    if (flags & (1ULL << 9))
+        __asm__ __volatile__("sti" ::: "memory");
+}
+
 static BOOLEAN v32_is_keyboard(const EFI_USB_INTERFACE_DESCRIPTOR *d)
 {
     return d->InterfaceClass == 0x03U &&
@@ -441,6 +454,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     UINT8 event_cycle = 1U;
     BOOLEAN ac64 = FALSE, halted = FALSE, running = FALSE;
     BOOLEAN disconnected = FALSE, attrs_changed_here = FALSE, refs_cleared = FALSE;
+    UINT64 saved_rflags = 0;
+    BOOLEAN cpu_interrupts_disabled = FALSE;
     struct dma_obj dcbaa_d = {0}, spa_d = {0}, cr_d = {0}, ev_d = {0}, erst_d = {0};
     struct dma_obj input_d = {0}, output_d = {0}, ep0_d = {0};
     struct dma_obj *scratch = NULL;
@@ -483,6 +498,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     if (EFI_ERROR(s)) { v32_fail(u"QUIESCE", u"DISCONNECT CONTROLLER", s); goto out; }
     disconnected = TRUE;
     Print(u"UEFI USB STACK QUIESCED / DISCONNECT=PASS\r\n");
+    saved_rflags = v32_disable_cpu_interrupts();
+    cpu_interrupts_disabled = TRUE;
 
     s = v32_pci_match(controller, b.pci_segment, b.pci_bus,
                       b.pci_device, b.pci_function,
@@ -754,13 +771,17 @@ out:
                                attrs_changed, NULL);
         if (EFI_ERROR(ts) && !EFI_ERROR(s)) s = ts;
     }
+    if (cpu_interrupts_disabled) {
+        v32_restore_cpu_interrupts(saved_rflags);
+        cpu_interrupts_disabled = FALSE;
+    }
     if (EFI_ERROR(s)) {
         Print(u"\r\nV32 GATE 6: FAIL RESULT=%r\r\n", s);
         Print(u"FAIL STAGE=%s OP=%s STATUS=%r\r\n", fail_stage, fail_op, fail_status);
     } else {
         Print(u"\r\nV32 GATE 6: PASS\r\n");
         Print(u"UEFI DISCOVERY=1 QUIESCE=1 PORT RESET=1 ENABLE SLOT=1 ADDRESS DEVICE=1\r\n");
-        Print(u"COMMANDS=2 COMMAND-DOORBELLS=2 CPU-INTERRUPTS=0 / LS+FS ONLY\r\n");
+        Print(u"COMMANDS=2 COMMAND-DOORBELLS=2 CPU-INTERRUPT-DELIVERY=DISABLED / LS+FS ONLY\r\n");
         Print(u"INITIAL EP0 MPS=8 / POST-ADDRESS SLOT STATE=ADDRESSED\r\n");
         Print(u"RESET RECOVERY + POINTER CLEAR + DMA RELEASE=PASS\r\n");
     }
