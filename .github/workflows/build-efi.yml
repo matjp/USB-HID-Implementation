@@ -125,16 +125,22 @@ jobs:
         run: |
           set -euxo pipefail
           WORK="build/$TEST_ID/qemu"
-          ESP="$WORK/ESP"
+          DISK="$WORK/ESP.img"
           QMP="$WORK/qmp.sock"
           SCREEN="$WORK/qemu-screen.png"
           SCREEN_AFTER="$WORK/qemu-after-key.png"
-          OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f -name 'OVMF_CODE*.fd' -print -quit 2>/dev/null || true)"
-          OVMF_VARS="$(find /usr/share/OVMF /usr/share/edk2* -type f -name 'OVMF_VARS*.fd' -print -quit 2>/dev/null || true)"
-          test -n "$OVMF_CODE"; test -n "$OVMF_VARS"
-          mkdir -p "$ESP/EFI/BOOT"
-          cp "build/$TEST_ID/BOOTX64.EFI" "$ESP/EFI/BOOT/BOOTX64.EFI"
-          cp "$OVMF_VARS" "$WORK/OVMF_VARS.fd"
+          OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f \( -name 'OVMF_CODE.4m.fd' -o -name 'OVMF_CODE.fd' \) -print -quit 2>/dev/null || true)"
+          test -n "$OVMF_CODE"
+          mkdir -p "$WORK"
+
+          truncate -s 64M "$DISK"
+          mkfs.vfat -F 32 "$DISK"
+          MTOOLSRC="$WORK/mtools.conf"
+          printf 'drive v: file=%s\n' "$DISK" > "$MTOOLSRC"
+          export MTOOLSRC
+          mmd v:/EFI v:/EFI/BOOT
+          mcopy -o "build/$TEST_ID/BOOTX64.EFI" v:/EFI/BOOT/BOOTX64.EFI
+          mdir v:/EFI/BOOT
 
           cat > "$WORK/qmp.py" <<'PY'
           import json, socket, sys, time
@@ -167,9 +173,8 @@ jobs:
           qemu-system-x86_64 \
             -machine q35 \
             -m 512M \
-            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-            -drive if=pflash,format=raw,file="$WORK/OVMF_VARS.fd" \
-            -drive file=fat:rw:"$ESP",format=raw \
+            -bios "$OVMF_CODE" \
+            -drive file="$DISK",format=raw,if=ide \
             -device qemu-xhci,id=xhci \
             -device usb-kbd,bus=xhci.0 \
             -display gtk \
@@ -204,6 +209,7 @@ jobs:
           cp "build/$TEST_ID/qemu/qemu-screen.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
           cp "build/$TEST_ID/qemu/qemu-after-key.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-AFTER-KEY.png"
           cp "build/$TEST_ID/qemu/qemu.log" "artifact/EFI-$TEST_ID/QEMU.log"
+          cp "build/$TEST_ID/qemu/ESP.img" "artifact/EFI-$TEST_ID/QEMU-ESP.img"
           test -s "artifact/EFI-$TEST_ID/BOOTX64.EFI"
           test -s "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
           test -s "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
