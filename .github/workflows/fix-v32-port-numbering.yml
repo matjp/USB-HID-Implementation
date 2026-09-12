@@ -20,11 +20,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! grep -qF 'if (root == 0U || nodes != 1U) {' efi/xhci_mmio_v32.c; then
-            echo 'No pending V32 source repair; exiting.'
-            exit 0
-          fi
-
           git checkout 1277b53282bbe88138e8eba78b4a32f631cce61b -- efi/xhci_mmio_v32.c
 
           python3 - <<'PY'
@@ -59,10 +54,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! grep -qF 'xhci_port = (UINT8)(b.keyboard.root_port + 1U);' efi/xhci_mmio_v32.c; then
-            echo 'No repair was applied; nothing to commit.'
-            exit 0
-          fi
           rm -f .github/workflows/fix-v32-port-numbering.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
