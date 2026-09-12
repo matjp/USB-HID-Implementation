@@ -134,7 +134,9 @@ jobs:
           QEMU_LOG="$WORK/qemu.log"
           QEMU_PIDFILE="$WORK/qemu.pid"
           OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f \( -name 'OVMF_CODE_4M.fd' -o -name 'OVMF_CODE.4m.fd' -o -name 'OVMF_CODE.fd' \) -print -quit 2>/dev/null || true)"
+          OVMF_VARS="$(find /usr/share/OVMF /usr/share/edk2* -type f \( -name 'OVMF_VARS_4M.fd' -o -name 'OVMF_VARS.fd' \) -print -quit 2>/dev/null || true)"
           test -n "$OVMF_CODE"
+          test -n "$OVMF_VARS"
           mkdir -p "$WORK"
           rm -f "$QMP" "$SCREEN_PPM" "$SCREEN_AFTER_PPM" "$SCREEN" "$SCREEN_AFTER" "$QEMU_LOG"
 
@@ -146,6 +148,9 @@ jobs:
           mmd v:/EFI v:/EFI/BOOT
           mcopy -o "build/$TEST_ID/BOOTX64.EFI" v:/EFI/BOOT/BOOTX64.EFI
           mdir v:/EFI/BOOT
+
+          cp "$OVMF_VARS" "$WORK/OVMF_VARS.fd"
+          OVMF_VARS_COPY="$WORK/OVMF_VARS.fd"
 
           cat > "$WORK/qmp.py" <<'PY'
           import json, socket, sys, time
@@ -177,7 +182,8 @@ jobs:
           qemu-system-x86_64 \
             -machine q35 \
             -m 512M \
-            -bios "$OVMF_CODE" \
+            -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
+            -drive if=pflash,format=raw,unit=1,file="$OVMF_VARS_COPY" \
             -drive file="$DISK",format=raw,if=ide \
             -device qemu-xhci,id=xhci \
             -device usb-kbd,bus=xhci.0 \
