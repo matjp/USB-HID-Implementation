@@ -45,7 +45,7 @@ The handoff is a bounded, versioned value object. For this EFI experiment its tr
 
 No file, disk write, UEFI variable, NVRAM state or speculative cross-application channel is required.
 
-The producer must complete all USB discovery reads before ownership is released to the bridge.
+The producer must finish all USB discovery reads before ownership is released to the bridge.
 
 ### 5.1 Required selected-device information
 
@@ -64,7 +64,7 @@ Unavailable optional values remain explicitly unavailable; the bridge must not i
 
 ### 5.2 Initial EP0 packet-size rule
 
-The USB device descriptor's `bMaxPacketSize0` is **not** the value that V32 should automatically place into the initial EP0 Context used by Address Device.
+The USB device descriptor's `bMaxPacketSize0` is not the value that V32 should automatically place into the initial EP0 Context used by Address Device.
 
 For Gate 6's Low-/Full-Speed scope, the initial Input EP0 Context used by Address Device shall use the xHCI-defined default control-endpoint Max Packet Size of **8 bytes**. The xHCI specification defines this speed-dependent default and states that the device descriptor can be read afterward to discover the actual Full-Speed value when necessary. citeturn727860search24turn727860search25
 
@@ -74,8 +74,6 @@ Consequently:
 - Full-Speed: initial EP0 Max Packet Size = 8 bytes; later code may read `bMaxPacketSize0` and, if different, update EP0 using the appropriate subsequent xHCI mechanism.
 
 Gate 6 does not perform that later descriptor read or EP0 update. The UEFI handoff may retain the descriptor value as evidence for later gates, but V32 must not require it to construct Address Device.
-
-This keeps Gate 6 entirely within the planned `Port Reset -> Enable Slot -> Address Device` scope.
 
 ## 6. UEFI USB-stack ownership handoff
 
@@ -147,63 +145,66 @@ V32 is cumulative and must carry forward the applicable V29/V30/V31 implementati
 20. Select only the handoff-provided root port.
 21. Read its live PORTSC.
 22. Require the port to be connected.
-23. Read the live port speed from PORTSC.
-24. Accept Low Speed or Full Speed only; reject High Speed and SuperSpeed.
-25. Do not scan other ports.
+23. Identify the **Supported Protocol Capability** whose Port Offset/Port Count range contains the selected root port; use that capability as the port's protocol/slot-type description. Do not use the first protocol capability merely because it appears first in the extended-capability list. Linux and iPXE both model protocol capability lookup by port range. citeturn568292search0turn568292search2
+24. Read the live port speed from PORTSC.
+25. Accept Low Speed or Full Speed only; reject High Speed and SuperSpeed.
+26. Do not scan other ports.
 
 ### Phase D — USB2-compatible port reset
 
-26. Apply only the required USB2 PORTSC reset operation and required change-bit handling while preserving unrelated state.
-27. Poll for reset completion/change.
-28. Consume and validate the corresponding Port Status Change Event by Port ID using the existing polled primary event ring.
-29. Re-read PORTSC.
-30. Require the device to remain connected.
-31. Validate the expected enabled/U0 post-reset state for the selected USB2 port.
-32. Use the post-reset live PORTSC speed as the authoritative Slot Context Speed.
+27. Before asserting Port Reset, identify and acknowledge only the pre-existing reset-change indication needed to make the subsequent reset completion observable; in particular, clear a stale `PRC` using the required RW1C write semantics without rewriting unrelated PORTSC state.
+28. Apply only the required USB2 PORTSC reset operation and required change-bit handling while preserving unrelated state.
+29. Poll for reset completion/change.
+30. Consume and validate the corresponding Port Status Change Event by Port ID using the existing polled primary event ring.
+31. Re-read PORTSC.
+32. Require the device to remain connected.
+33. Validate the expected enabled/U0 post-reset state for the selected USB2 port.
+34. Use the post-reset live PORTSC speed as the authoritative Slot Context Speed.
 
 ### Phase E — Enable Slot
 
-33. Obtain the controller-declared protocol slot type.
-34. Issue exactly one Enable Slot command.
-35. Ring Doorbell 0 only.
-36. Poll the primary event ring with CPU interrupts disabled.
-37. Require one matching Command Completion Event with Success completion code.
-38. Validate the command TRB pointer and record the newly returned Slot ID.
-39. Never reuse a Slot ID from UEFI or V31.
+35. Obtain the Slot Type from the Supported Protocol Capability covering the selected root port.
+36. Issue exactly one Enable Slot command with that Slot Type.
+37. Ring Doorbell 0 only.
+38. Poll the primary event ring with CPU interrupts disabled.
+39. Require one matching Command Completion Event with Success completion code.
+40. Validate the command TRB pointer and record the newly returned Slot ID.
+41. Never reuse a Slot ID from UEFI or V31.
 
 ### Phase F — Fresh Slot and EP0 contexts
 
-40. Determine context size from `HCCPARAMS1.CTXSZ`.
-41. Allocate fresh Input and Output Device Context memory and a fresh EP0 Transfer Ring using the V29 DMA contract.
-42. Initialize memory from zero with required alignment and context stride.
-43. Populate the DCBAA slot entry with the fresh Output Device Context device-visible address.
-44. Set Input Control Context Add Context flags for Slot and EP0 only; no Drop Context flags.
-45. Construct the Input Slot Context with Context Entries = 1, selected Root Hub Port, live post-reset Speed, and zero hub-parent fields for this direct-attach/no-hub gate.
-46. Construct the Input EP0 Context as a Control endpoint.
-47. Set initial EP0 Max Packet Size to **8 bytes**.
-48. Set Max Burst Size = 0 and MaxPStreams = 0.
-49. Initialize the EP0 Transfer Ring Dequeue Pointer to the fresh ring with DCS = 1.
-50. Set the remaining required initial EP0 control fields to their specification-defined values.
+42. Determine context size from `HCCPARAMS1.CTXSZ`.
+43. Allocate fresh Input and Output Device Context memory and a fresh EP0 Transfer Ring using the V29 DMA contract.
+44. Initialize memory from zero with required alignment and context stride.
+45. Populate the DCBAA slot entry with the fresh Output Device Context device-visible address.
+46. Set Input Control Context Add Context flags for Slot and EP0 only; no Drop Context flags.
+47. Construct the Input Slot Context with Context Entries = 1, selected Root Hub Port, live post-reset Speed, and zero hub-parent fields for this direct-attach/no-hub gate.
+48. Construct the Input EP0 Context as a Control endpoint.
+49. Set initial EP0 Max Packet Size to **8 bytes**.
+50. Set Max Burst Size = 0 and MaxPStreams = 0.
+51. Set the control endpoint's Average TRB Length to the xHCI-defined value of 8.
+52. Initialize the EP0 Transfer Ring Dequeue Pointer to the fresh ring with DCS = 1.
+53. Set the remaining required initial EP0 control fields to their specification-defined values.
 
 ### Phase G — Address Device
 
-51. Build exactly one Address Device command for the fresh Slot ID.
-52. Point the command at the fresh Input Device Context.
-53. Ring the command doorbell.
-54. Poll the primary event ring.
-55. Require the matching Command Completion Event with Success completion code.
-56. Validate event Slot ID and Command TRB Pointer.
-57. Validate the resulting Output Slot Context has the expected Addressed state and a non-zero USB device address.
-58. Do not issue GET_DESCRIPTOR, SET_CONFIGURATION, Configure Endpoint, Evaluate Context, HID Set Protocol, or interrupt-IN transfers in Gate 6.
+54. Build exactly one Address Device command for the fresh Slot ID.
+55. Point the command at the fresh Input Device Context.
+56. Ring the command doorbell.
+57. Poll the primary event ring.
+58. Require the matching Command Completion Event with Success completion code.
+59. Validate event Slot ID and Command TRB Pointer.
+60. Validate the resulting Output Slot Context has the expected Addressed state and a non-zero USB device address.
+61. Do not issue GET_DESCRIPTOR, SET_CONFIGURATION, Configure Endpoint, Evaluate Context, HID Set Protocol, or interrupt-IN transfers in Gate 6.
 
 ### Phase H — Safe recovery
 
-59. Halt the controller and confirm `HCH=1`.
-60. Reset the controller and confirm reset completion/CNR clear and halted state.
-61. Clear CRCR, DCBAAP, CONFIG, event-ring/interrupter references and every other controller pointer established by V29–V32.
-62. Only after all controller references are eliminated, unmap and free DMA.
-63. Restore any PCI attributes enabled by the bridge.
-64. Return success only after all teardown succeeds.
+62. Halt the controller and confirm `HCH=1`.
+63. Reset the controller and confirm reset completion/CNR clear and halted state.
+64. Clear CRCR, DCBAAP, CONFIG, event-ring/interrupter references and every other controller pointer established by V29–V32.
+65. Only after all controller references are eliminated, unmap and free DMA.
+66. Restore any PCI attributes enabled by the bridge.
+67. Return success only after all teardown succeeds.
 
 If the controller cannot be confirmed halted after a submitted command, DMA mappings must remain live and the existing non-returning fatal recovery path must be used. Memory must never be freed while xHCI may still reference it.
 
@@ -237,10 +238,12 @@ A successful V32 run must prove, without hard-coded Toshiba port/BDF values:
 - PCI Memory and Bus Master attributes were valid for bridge operation;
 - the controller was freshly halted/reset and initialized using the cumulative V29/V30/V31 machinery;
 - the selected root port was connected;
+- the selected root port's Supported Protocol Capability was matched by port range;
 - live PORTSC speed was Low or Full Speed;
+- stale reset-change state was distinguished from the new reset completion indication;
 - USB2-compatible port reset completed and the matching Port Status Change Event was consumed/validated;
 - the post-reset live speed was used for Slot Context;
-- Enable Slot returned a fresh Slot ID;
+- Enable Slot used the Slot Type belonging to the selected root port's Supported Protocol Capability and returned a fresh Slot ID;
 - fresh Input/Output contexts and DCBAA linkage were established;
 - the initial Address Device EP0 Max Packet Size was exactly 8 bytes;
 - Address Device completed successfully;
@@ -257,7 +260,7 @@ Before V32 source is created, review the planned implementation against:
 
 1. the complete current project documentation;
 2. UEFI specifications for USB I/O, Driver Model, PCI I/O, controller disconnect and DMA mapping;
-3. xHCI specification for USB2 port reset, command/event rings, Enable Slot, Device Contexts and Address Device;
+3. xHCI specification for USB2 port reset, Supported Protocol Capabilities, command/event rings, Enable Slot, Device Contexts and Address Device;
 4. Linux xhci-hcd as an implementation cross-check;
 5. coreboot/libpayload xHCI code as an implementation cross-check;
 6. proven V29/V30/V31 sources and their Toshiba hardware results.
@@ -269,6 +272,8 @@ The review must explicitly establish that:
 - V32 preserves the proven DMA/ring/controller lifecycle rather than substituting the incomplete scaffold;
 - the bridge binds to the UEFI-selected controller rather than the first matching xHCI controller;
 - the selected root port is used directly and no port scan is performed;
+- the port's Supported Protocol Capability is selected by port range;
+- stale PRC is cleared/handled before the reset so the resulting Port Status Change Event is attributable to the new reset;
 - Low/Full Speed is determined from live xHCI PORTSC state;
 - initial Address Device EP0 Max Packet Size is the 8-byte default, not the later descriptor value;
 - the Address Device contexts contain only the Slot and EP0 contexts required at this stage;
@@ -279,6 +284,8 @@ No CI build or Toshiba hardware test is authorized until this review passes.
 
 ## 13. Technical references
 
-The xHCI specification states that the Input EP0 Context used by Address Device must use the speed-dependent default Max Packet Size and that for Low-/Full-Speed the default is 8 bytes. It also describes the later Full-Speed descriptor read/update path. citeturn727860search24turn727860search25
+The xHCI specification defines the Address Device EP0 default Max Packet Size and the later Full-Speed descriptor/update path. citeturn727860search24turn727860search25
+
+Linux and iPXE locate Supported Protocol Capabilities by matching the port offset/count range rather than assuming the first protocol capability applies to every port. citeturn568292search0turn568292search2
 
 UEFI defines `DisconnectController()` so a NULL `DriverImageHandle` disconnects all drivers managing the controller and a NULL `ChildHandle` destroys all children. citeturn874430search24
