@@ -449,6 +449,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     UINT64 *dcbaa = NULL, *spa = NULL, *erst = NULL;
     UINT32 *cr = NULL, *input = NULL, *ep0 = NULL;
     UINT32 portsc_off;
+    UINT8 xhci_port = 0U;
 
     InitializeLib(image, st);
     uefi_call_wrapper(BS->SetMem, 3, &h, sizeof(h), 0);
@@ -517,89 +518,75 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     }
     s = mr32(p, 4, &hcs1); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCSPARAMS1", s); goto out; }
     s = mr32(p, 8, &hcs2); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCSPARAMS2", s); goto out; }
-    s = mr32(p, 0x10, &hcc); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCCPARAMS1", s); goto out; }
-    s = mr32(p, op + 4, &status); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"USBSTS", s); goto out; }
+    s = mr32(p, 0x10U, &hcc); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"HCCPARAMS1", s); goto out; }
+    s = mr32(p, 0x14U, &db); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"DBOFF", s); goto out; }
+    s = mr32(p, 0x18U, &rt); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"RTSOFF", s); goto out; }
+    s = mr32(p, op + 8U, &page_reg); ++reads; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"PAGESIZE", s); goto out; }
+    if (!page_reg) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGESIZE ZERO", s); goto out; }
+    db &= ~3U; rt &= ~0x1fU; ir = rt + 0x20U;
     max_slots = hcs1 & 0xffU;
-    scratchpads = (((hcs2 >> 21) & 31U) << 5) | ((hcs2 >> 27) & 31U);
-    ctxsz = (hcc & CTX_CSZ) ? 64 : 32;
-    s = mr32(p, op + 8, &page_reg); ++reads; if (EFI_ERROR(s) || !page_reg) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGESIZE", s); goto out; }
-    while (shift < 32 && !(page_reg & (1U << shift))) shift++;
-    if (shift >= 32) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGE BIT", s); goto out; }
-    xpage = (UINTN)1U << (12 + shift);
-    if (xpage != 4096U) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGE SIZE", s); goto out; }
-    scratch_pages = 1;
+    scratchpads = (((hcs2 >> 27) & 0x1fU) << 5) | ((hcs2 >> 21) & 0x1fU);
+    ac64 = (hcc & 1U) != 0U;
+    while (shift < 32U && !(page_reg & (1U << shift))) ++shift;
+    if (shift >= 32U) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGE BIT", s); goto out; }
+    xpage = (UINTN)1U << (12U + shift);
+    if (xpage > 0x100000U) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"PAGE SIZE", s); goto out; }
+    scratch_pages = xpage / 4096U;
+    if (!max_slots || scratchpads > MAX_SCRATCHPADS) { s = EFI_UNSUPPORTED; v32_fail(u"CAPS", u"LIMITS", s); goto out; }
+    Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u PAGE=%u AC64=%u CTXSZ=%u\r\n",
+          max_slots, scratchpads, (UINT32)xpage, ac64 ? 1U : 0U,
+          ((hcc >> 2) & 1U) ? 64U : 32U);
 
-    Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u PAGESIZE=%u CONTEXT=%u HCH=%u CNR=%u\r\n",
-          max_slots, scratchpads, (UINT32)xpage, ctxsz,
-          (status & STS_HCH) ? 1 : 0, (status & STS_CNR) ? 1 : 0);
-    if (!max_slots || scratchpads > MAX_SCRATCHPADS) {
-        s = EFI_UNSUPPORTED;
-        v32_fail(u"CAPS", u"LIMITS", s);
-        goto out;
-    }
-    s = mr32(p, 0x14, &db); reads++; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"DBOFF", s); goto out; }
-    db &= ~3U;
-    s = mr32(p, 0x18, &rt); reads++; if (EFI_ERROR(s)) { v32_fail(u"CAPS", u"RTSOFF", s); goto out; }
-    rt &= ~31U;
-    ir = rt + 0x20U;
-    s = v32_supported_protocol(p, hcc, b.keyboard.root_port, &proto_major, &proto_minor, &slot_type, &reads);
-    if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
-    if (proto_major != 2U) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"USB2 PROTOCOL", s); goto out; }
-    Print(u"CAPS: DBOFF=%08x RTSOFF=%08x SLOT-TYPE=%u PROTOCOL=%u.%u\r\n",
-          db, rt, slot_type, proto_major, proto_minor);
-
+    s = mr32(p, op + 4U, &status); ++reads; if (EFI_ERROR(s)) { v32_fail(u"HALT", u"USBSTS", s); goto out; }
     s = mr32(p, op, &cmd); ++reads; if (EFI_ERROR(s)) { v32_fail(u"HALT", u"USBCMD", s); goto out; }
     if (!(status & STS_HCH)) {
-        s = mw32(p, op, cmd & ~(CMD_RUN | CMD_INTE | CMD_HSEE));
-        ++writes;
+        s = mw32(p, op, cmd & ~(CMD_RUN | CMD_INTE | CMD_HSEE)); ++writes;
         if (EFI_ERROR(s)) { v32_fail(u"HALT", u"STOP", s); goto out; }
-        s = wait_hch(p, op, TRUE, 1000, &status, &reads);
+        s = wait_hch(p, op, TRUE, 10000U, &status, &reads);
         if (EFI_ERROR(s)) { v32_fail(u"HALT", u"HCH", s); goto out; }
     }
     halted = TRUE;
-    s = reset_xhci(p, op, &cmd, &status, &reads, &writes);
-    if (EFI_ERROR(s)) { v32_fail(u"RESET", u"RESET/CNR", s); goto out; }
-    if (!(status & STS_HCH)) { s = EFI_DEVICE_ERROR; v32_fail(u"RESET", u"HALTED", s); goto out; }
+    s = reset_xhci(p, op, &cmd, &status, &reads, &writes); if (EFI_ERROR(s)) goto out;
+    if (!(status & STS_HCH)) { s = EFI_DEVICE_ERROR; goto out; }
 
-    s = dma_alloc(p, 1, &dcbaa_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"DCBAA", s); goto out; }
-    s = dma_alloc(p, 1, &spa_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"SCRATCH ARRAY", s); goto out; }
-    s = dma_alloc(p, 1, &cr_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"COMMAND RING", s); goto out; }
-    s = dma_alloc(p, 1, &ev_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"EVENT RING", s); goto out; }
-    s = dma_alloc(p, 1, &erst_d); if (EFI_ERROR(s)) { v32_fail(u"DMA", u"ERST", s); goto out; }
+    s = dma_alloc(p, 1, &dcbaa_d); if (EFI_ERROR(s)) goto out;
+    s = dma_alloc(p, 1, &spa_d); if (EFI_ERROR(s)) goto out;
+    s = dma_alloc(p, 1, &cr_d); if (EFI_ERROR(s)) goto out;
+    s = dma_alloc(p, 1, &ev_d); if (EFI_ERROR(s)) goto out;
+    s = dma_alloc(p, 1, &erst_d); if (EFI_ERROR(s)) goto out;
+    if (scratchpads) {
+        scratch = (struct dma_obj *)AllocateZeroPool(sizeof(struct dma_obj) * scratchpads);
+        if (!scratch) { s = EFI_OUT_OF_RESOURCES; goto out; }
+        for (UINT32 i = 0; i < scratchpads; ++i) {
+            s = dma_alloc(p, scratch_pages, &scratch[i]);
+            if (EFI_ERROR(s)) goto out;
+        }
+    }
     if (!v32_dma_ok(&dcbaa_d, ac64) || !v32_dma_ok(&spa_d, ac64) ||
         !v32_dma_ok(&cr_d, ac64) || !v32_dma_ok(&ev_d, ac64) ||
         !v32_dma_ok(&erst_d, ac64)) {
         s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"ADDRESSING", s); goto out;
     }
+
     dcbaa = (UINT64 *)dcbaa_d.host;
     spa = (UINT64 *)spa_d.host;
     cr = (UINT32 *)cr_d.host;
-    ev = (UINT32 *)ev_d.host;
     erst = (UINT64 *)erst_d.host;
-    if (scratchpads) {
-        scratch = AllocatePool(sizeof(*scratch) * scratchpads);
-        if (!scratch) { s = EFI_OUT_OF_RESOURCES; v32_fail(u"DMA", u"SCRATCH LIST", s); goto out; }
-        uefi_call_wrapper(BS->SetMem, 3, scratch, sizeof(*scratch) * scratchpads, 0);
-        for (UINT32 i = 0; i < scratchpads; ++i) {
-            s = dma_alloc(p, scratch_pages, &scratch[i]);
-            if (EFI_ERROR(s)) { v32_fail(u"DMA", u"SCRATCH PAGE", s); goto out; }
-            if (!v32_dma_ok(&scratch[i], ac64)) { s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"SCRATCH ADDRESS", s); goto out; }
-            spa[i] = scratch[i].dev;
-        }
-        spa[0] = scratch[0].dev;
-    }
+    dcbaa[0] = scratchpads ? spa_d.dev : 0;
+    for (UINT32 i = 0; i < scratchpads; ++i) spa[i] = scratch[i].dev;
+    cr[0] = 0; cr[1] = 0; cr[2] = 0;
+    cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT);
     cr[4] = 0; cr[5] = 0; cr[6] = 0; cr[7] = 0;
     cr[(CMD_TRBS - 1U) * 4U + 0U] = (UINT32)cr_d.dev;
     cr[(CMD_TRBS - 1U) * 4U + 1U] = (UINT32)(cr_d.dev >> 32);
     cr[(CMD_TRBS - 1U) * 4U + 2U] = 0;
-    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE | (TRB_LINK << TRB_TYPE_SHIFT);
+    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE |
+                                     (TRB_LINK << TRB_TYPE_SHIFT);
     erst[0] = ev_d.dev; erst[1] = 0; erst[2] = EVENT_TRBS; erst[3] = 0;
 
     s = mw64(p, op + 0x30U, dcbaa_d.dev); writes += 2; if (EFI_ERROR(s)) goto out;
-    if (scratchpads) { s = mw64(p, op + 0x38U, spa_d.dev); writes += 2; if (EFI_ERROR(s)) goto out; }
-    else { s = mw64(p, op + 0x38U, 0); writes += 2; if (EFI_ERROR(s)) goto out; }
-    s = mw32(p, op + 0x18U, (UINT32)cr_d.dev | (UINT32)CRCR_RCS); ++writes; if (EFI_ERROR(s)) goto out;
-    s = mw32(p, op + 0x1cU, (UINT32)(cr_d.dev >> 32)); ++writes; if (EFI_ERROR(s)) goto out;
+    s = mw32(p, op + 0x38U, 1U); ++writes; if (EFI_ERROR(s)) goto out;
+    s = mw64(p, op + 0x18U, cr_d.dev | CRCR_RCS); writes += 2; if (EFI_ERROR(s)) goto out;
     s = mw32(p, ir + 8U, 1U); ++writes; if (EFI_ERROR(s)) goto out;
     s = mw64(p, ir + 0x10U, erst_d.dev & ERST_ADDR_MASK); writes += 2; if (EFI_ERROR(s)) goto out;
     s = mw64(p, ir + 0x18U, ev_d.dev & ERDP_ADDR_MASK); writes += 2; if (EFI_ERROR(s)) goto out;
@@ -611,11 +598,15 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     halted = FALSE; running = TRUE;
     s = wait_hch(p, op, FALSE, 10000U, &status, &reads); if (EFI_ERROR(s)) goto out;
 
-    portsc_off = op + 0x400U + ((UINT32)b.keyboard.root_port) * 0x10U;
+    portsc_off = op + 0x400U + ((UINT32)xhci_port - 1U) * 0x10U;
     s = mr32(p, portsc_off, &status); ++reads; if (EFI_ERROR(s)) goto out;
     if (!(status & V32_PORTSC_CCS)) { s = EFI_NOT_FOUND; v32_fail(u"PORT", u"NOT CONNECTED", s); goto out; }
     speed = (UINT8)((status & V32_PORTSC_SPEED_MASK) >> V32_PORTSC_SPEED_SHIFT);
     if (speed != V32_USB_SPEED_LOW && speed != V32_USB_SPEED_FULL) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"LS/FS ONLY", s); goto out; }
+    if (b.keyboard.root_port == 0xffU) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"ROOT PORT NUMBER", s); goto out; }
+    xhci_port = (UINT8)(b.keyboard.root_port + 1U);
+    s = v32_supported_protocol(p, hcc, xhci_port, &proto_major, &proto_minor, &slot_type, &reads); if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
+    if (proto_major != 2U) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"USB2 PROTOCOL", s); goto out; }
     Print(u"PORT=%u CONNECTED SPEED=%u PROTOCOL=%u.%u SLOT-TYPE=%u\r\n",
           b.keyboard.root_port, speed, proto_major, proto_minor, slot_type);
 
@@ -632,7 +623,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     if (EFI_ERROR(s)) goto out;
     Print(u"PORT RESET: ASSERTED / WAITING\r\n");
     s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_PORT_STATUS_CHANGE,
-                       b.keyboard.root_port, 0, 0, NULL,
+                       xhci_port, 0, 0, NULL,
                        &event_index, &event_cycle, &reads, &writes);
     if (EFI_ERROR(s)) { v32_fail(u"PORT RESET", u"PORT STATUS CHANGE", s); goto out; }
     s = mr32(p, portsc_off, &status); ++reads; if (EFI_ERROR(s)) goto out;
@@ -645,8 +636,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     }
     Print(u"PORT RESET: PRC=1 PED=1 U0=1 LIVE-SPEED=%u PASS\r\n", speed);
 
-    cr[8] = 0; cr[9] = 0; cr[10] = 0;
-    cr[11] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT) | ((UINT32)slot_type << 16);
     s = mw32(p, db, 0U); ++writes;
     if (EFI_ERROR(s)) goto out;
     Print(u"ENABLE SLOT: COMMAND DOORBELL=0 PTR=%016lx SLOT-TYPE=%u\r\n", cr_d.dev, slot_type);
@@ -674,7 +663,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         input_ctx[0] = 0U;
         input_ctx[1] = (1U << 0) | (1U << 1);
         slot[0] = (1U << 27) | ((UINT32)speed << 20);
-        slot[1] = ((UINT32)b.keyboard.root_port << 16);
+        slot[1] = ((UINT32)xhci_port << 16);
         epctx[0] = 0U;
         epctx[1] = (3U << 1) | (4U << 3) | (8U << 16);
         epctx[2] = (UINT32)ep0_d.dev | 1U;
@@ -689,17 +678,18 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         dcbaa[slot_id] = output_d.dev;
     }
 
-    cr[8] = (UINT32)input_d.dev;
-    cr[9] = (UINT32)(input_d.dev >> 32);
-    cr[10] = 0U;
-    cr[11] = TRB_CYCLE | (V32_TRB_ADDRESS_DEVICE << TRB_TYPE_SHIFT) |
-             ((UINT32)slot_id << 24);
-    s = mw32(p, db, 0U); ++writes;
+    cr[4] = (UINT32)input_d.dev;
+    cr[5] = (UINT32)(input_d.dev >> 32);
+    cr[6] = 0U;
+    cr[7] = TRB_CYCLE | (V32_TRB_ADDRESS_DEVICE << TRB_TYPE_SHIFT) |
+            ((UINT32)slot_id << 24);
+    s = mw32(p, db, 0U);
+    ++writes;
     if (EFI_ERROR(s)) goto out;
     Print(u"ADDRESS DEVICE: COMMAND DOORBELL=0 INPUT=%016lx EP0-MPS=8 AVG-TRB=8\r\n",
           input_d.dev);
     s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,
-                       0, cr_d.dev + 32U, slot_id, NULL,
+                       0, cr_d.dev + 16U, slot_id, NULL,
                        &event_index, &event_cycle, &reads, &writes);
     if (EFI_ERROR(s)) { v32_fail(u"ADDRESS", u"COMPLETION", s); goto out; }
     {
@@ -725,7 +715,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     if (!(status & STS_HCH)) { s = EFI_DEVICE_ERROR; goto out; }
     s = mw64(p, op + 0x18U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
     s = mw64(p, op + 0x30U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
-    s = mw64(p, op + 0x38U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
+    s = mw32(p, op + 0x38U, 0); ++writes; if (EFI_ERROR(s)) goto out;
     s = mw32(p, ir + 8U, 0); ++writes; if (EFI_ERROR(s)) goto out;
     s = mw64(p, ir + 0x10U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
     s = mw64(p, ir + 0x18U, 0); writes += 2; if (EFI_ERROR(s)) goto out;
@@ -736,7 +726,7 @@ out:
     if (halted && p && !refs_cleared) {
         ts = mw64(p, op + 0x18U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
         ts = mw64(p, op + 0x30U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
-        ts = mw64(p, op + 0x38U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
+        ts = mw32(p, op + 0x38U, 0); ++writes; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
         ts = mw32(p, ir + 8U, 0); ++writes; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
         ts = mw64(p, ir + 0x10U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
         ts = mw64(p, ir + 0x18U, 0); writes += 2; if (EFI_ERROR(ts)) v32_fatal_running(&reads, &writes);
