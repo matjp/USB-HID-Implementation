@@ -20,24 +20,33 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           python3 - <<'PY'
           from pathlib import Path
+          import re
           p = Path('efi/xhci_mmio_v32.c')
           s = p.read_text()
 
-          old = '''        {\n            UINT32 after_reset = 0;\n            s = mr32(p, portsc_off, &after_reset); ++reads;\n            if (EFI_ERROR(s)) goto out;\n            Print(u"RESET OBSERVE: PR=%u PRC=%u PED=%u PLS=%u SPEED=%u\\r\\n",\n                  (after_reset & V32_PORTSC_PR) ? 1U : 0U,\n                  (after_reset & V32_PORTSC_PRC) ? 1U : 0U,\n                  (after_reset & V32_PORTSC_PED) ? 1U : 0U,\n                  (after_reset & V32_PORTSC_PLS_MASK) >> 5,\n                  (after_reset & V32_PORTSC_SPEED_MASK) >> V32_PORTSC_SPEED_SHIFT);\n            {\n                volatile UINT32 *ev = (volatile UINT32 *)ev_d.host;\n                Print(u"EVENT[0]: %08x %08x %08x %08x\\r\\n", ev[0], ev[1], ev[2], ev[3]);\n            }\n        }\n        Print(u"PORT RESET: ASSERTED / WAITING\\r\\n");\n'''
-          new = '''    Print(u"PORT RESET: ASSERTED / WAITING\\r\\n");\n'''
-          if old not in s:
+          pattern = re.compile(
+              r'\n    \{\n'
+              r'        UINT32 after_reset = 0;\n'
+              r'.*?'
+              r'        \}\n'
+              r'    \}\n'
+              r'    Print\(u"PORT RESET: ASSERTED / WAITING\\r\\n"\);',
+              re.S)
+          s2, n = pattern.subn('\n    Print(u"PORT RESET: ASSERTED / WAITING\\r\\n");', s, count=1)
+          if n != 1:
               raise SystemExit('temporary reset diagnostic block not found')
-          s = s.replace(old, new, 1)
+          s = s2
 
-          old = '''    erst[0] = ev_d.dev; erst[1] = 0; erst[2] = EVENT_TRBS; erst[3] = 0;\n'''
+          old = '    erst[0] = ev_d.dev; erst[1] = 0; erst[2] = EVENT_TRBS; erst[3] = 0;\n'
           new = '''    {\n        UINT32 *erst32 = (UINT32 *)erst;\n        erst32[0] = (UINT32)ev_d.dev;\n        erst32[1] = (UINT32)(ev_d.dev >> 32);\n        erst32[2] = EVENT_TRBS;\n        erst32[3] = 0U;\n    }\n'''
           if old not in s:
               raise SystemExit('ERST initialization pattern not found')
           s = s.replace(old, new, 1)
 
-          old = '#define V32_USB_SPEED_FULL          1U\n#define V32_USB_SPEED_LOW           2U'
-          if old not in s:
-              raise SystemExit('correct speed encoding not present')
+          if '#define V32_USB_SPEED_FULL          1U' not in s:
+              raise SystemExit('Full-speed encoding is not corrected')
+          if '#define V32_USB_SPEED_LOW           2U' not in s:
+              raise SystemExit('Low-speed encoding is not corrected')
 
           p.write_text(s)
           PY
