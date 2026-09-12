@@ -355,7 +355,7 @@ static EFI_STATUS v32_wait_event(EFI_PCI_IO_PROTOCOL *p, UINT32 erdp_off,
                 match = match && event_port == port;
             else
                 match = match && cc == CC_SUCCESS && ptr == trb_ptr &&
-                        event_slot == slot_expected;
+                        (slot_expected == 0U || event_slot == slot_expected);
             *event_index = *event_index + 1U;
             if (*event_index == EVENT_TRBS) {
                 *event_index = 0;
@@ -575,7 +575,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     dcbaa[0] = scratchpads ? spa_d.dev : 0;
     for (UINT32 i = 0; i < scratchpads; ++i) spa[i] = scratch[i].dev;
     cr[0] = 0; cr[1] = 0; cr[2] = 0;
-    cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT);
+    cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT) |
+            ((UINT32)slot_type << 16);
     cr[4] = 0; cr[5] = 0; cr[6] = 0; cr[7] = 0;
     cr[(CMD_TRBS - 1U) * 4U + 0U] = (UINT32)cr_d.dev;
     cr[(CMD_TRBS - 1U) * 4U + 1U] = (UINT32)(cr_d.dev >> 32);
@@ -661,7 +662,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     if (EFI_ERROR(s)) goto out;
     Print(u"ENABLE SLOT: COMMAND DOORBELL=0 PTR=%016lx SLOT-TYPE=%u\r\n", cr_d.dev, slot_type);
     s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,
-                       0, cr_d.dev, (UINT8)max_slots, &slot_id,
+                       0, cr_d.dev, 0, &slot_id,
                        &event_index, &event_cycle, &reads, &writes);
     if (EFI_ERROR(s)) { v32_fail(u"ENABLE SLOT", u"COMPLETION", s); goto out; }
     Print(u"ENABLE SLOT: COMPLETION SUCCESS SLOT=%u PASS\r\n", slot_id);
