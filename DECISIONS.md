@@ -99,3 +99,11 @@ This is a controller-ownership/quiesce transition, not reuse of UEFI runtime sta
 ## D022 — Gate 6 uses the xHCI default EP0 packet size for Address Device
 
 For the initial Address Device command, the bridge must use the xHCI-defined speed-dependent default Max Packet Size for EP0. Within Gate 6's Low-/Full-Speed scope this value is 8 bytes. The USB device descriptor's `bMaxPacketSize0` is not substituted into the initial Address Device context. A later gate may read the descriptor and, for a Full-Speed device when the actual value differs, update the EP0 context using the appropriate xHCI mechanism. Gate 6 performs no pre-Address-Device descriptor transfer.
+
+## D023 — Enable Slot uses the protocol capability covering the selected port
+
+Gate 6 must locate the Supported Protocol Capability whose Port Offset/Port Count range contains the selected root port and use that capability's protocol/Slot Type for the Enable Slot command. The bridge must not assume that the first Supported Protocol Capability in the extended-capability list applies to the selected port. This is a portability requirement for controllers exposing multiple protocol ranges.
+
+## D024 — Reset completion must be attributable to this reset
+
+Before issuing the USB2 Port Reset operation, Gate 6 must handle any pre-existing reset-change (`PRC`) state so that the later Port Status Change Event and PRC transition can be attributed to the reset issued by V32. The operation must use the PORTSC RW1C semantics for change bits and preserve unrelated state. A stale PRC indication must not be mistaken for successful completion of the new reset.
