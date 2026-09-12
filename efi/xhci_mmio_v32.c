@@ -681,9 +681,6 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     saved_rflags = v32_disable_cpu_interrupts();
     cpu_interrupts_disabled = TRUE;
 
-    s = v32_validate_controller_path(controller, &b.controller_path);
-    if (EFI_ERROR(s)) { v32_fail(u"BIND", u"CONTROLLER PATH", s); goto out; }
-
     s = v32_pci_match(controller, b.pci_segment, b.pci_bus,
                       b.pci_device, b.pci_function,
                       b.pci_vendor, b.pci_device_id, &p);
