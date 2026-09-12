@@ -1,6 +1,5 @@
 /* Version 32 — cumulative Gate 6 implementation */
 
-/* Reuse the complete proven V31 controller lifecycle in this translation unit. */
 #define efi_main v31_unused_efi_main
 #include "xhci_mmio_v31.c"
 #undef efi_main
@@ -96,7 +95,7 @@ static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path, UINT8 *usb_nodes)
     UINT8 count = 0;
     while (p) {
         EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
-        UINT16 len = h->Length;
+        UINT16 len = (UINT16)h->Length[0] | ((UINT16)h->Length[1] << 8);
         if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL) || h->Type == 0x7fU)
             break;
         if (h->Type == 0x03U && h->SubType == 0x05U && len >= 6U) {
@@ -440,7 +439,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     struct dma_obj input_d = {0}, output_d = {0}, ep0_d = {0};
     struct dma_obj *scratch = NULL;
     UINT64 *dcbaa = NULL, *spa = NULL, *erst = NULL;
-    UINT32 *cr = NULL, *ep0 = NULL;
+    UINT32 *cr = NULL, *input = NULL, *ep0 = NULL;
     UINT32 portsc_off;
 
     InitializeLib(image, st);
@@ -524,7 +523,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     scratch_pages = xpage / 4096U;
     if (!max_slots || scratchpads > MAX_SCRATCHPADS) { s = EFI_UNSUPPORTED; goto out; }
     Print(u"CAPS: SLOTS=%u SCRATCHPADS=%u PAGE=%u AC64=%u CTXSZ=%u\r\n",
-          max_slots, scratchpads, (UINT32)xhci_page, ac64 ? 1U : 0U,
+          max_slots, scratchpads, (UINT32)xpage, ac64 ? 1U : 0U,
           ((hcc >> 2) & 1U) ? 64U : 32U);
 
     s = mr32(p, op + 4U, &status); ++reads; if (EFI_ERROR(s)) goto out;
@@ -551,7 +550,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         uefi_call_wrapper(BS->SetMem, 3, scratch, scratchpads * sizeof(struct dma_obj), 0);
         for (UINT32 i = 0; i < scratchpads; ++i) {
             s = dma_alloc(p, scratch_pages, &scratch[i]); if (EFI_ERROR(s)) goto out;
-            if ((scratch[i].dev & ((UINT64)xhci_page - 1ULL)) || !v32_dma_ok(&scratch[i], ac64)) {
+            if ((scratch[i].dev & ((UINT64)xpage - 1ULL)) || !v32_dma_ok(&scratch[i], ac64)) {
                 s = EFI_UNSUPPORTED; v32_fail(u"DMA", u"SCRATCH ADDRESS", s); goto out;
             }
         }
@@ -574,7 +573,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     cr[(CMD_TRBS - 1U) * 4U + 0U] = (UINT32)cr_d.dev;
     cr[(CMD_TRBS - 1U) * 4U + 1U] = (UINT32)(cr_d.dev >> 32);
     cr[(CMD_TRBS - 1U) * 4U + 2U] = 0;
-    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE | (TRB_LINK << TRB_TYPE_SHIFT);
+    cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE |
+                                     (TRB_LINK << TRB_TYPE_SHIFT);
     erst[0] = ev_d.dev; erst[1] = 0; erst[2] = EVENT_TRBS; erst[3] = 0;
 
     s = mw64(p, op + 0x30U, dcbaa_d.dev); writes += 2; if (EFI_ERROR(s)) goto out;
@@ -649,13 +649,12 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     }
     {
         UINTN stride = ((hcc >> 2) & 1U) ? 64U : 32U;
+        UINT32 *input = (UINT32 *)input_d.host;
         UINT32 *slot = (UINT32 *)((UINT8 *)input_d.host + stride);
         UINT32 *epctx = (UINT32 *)((UINT8 *)input_d.host + stride * 2U);
         uefi_call_wrapper(BS->SetMem, 3, input_d.host, 4096U, 0);
         uefi_call_wrapper(BS->SetMem, 3, output_d.host, 4096U, 0);
         uefi_call_wrapper(BS->SetMem, 3, ep0_d.host, 4096U, 0);
-        input = (UINT32 *)input_d.host;
-        ep0 = (UINT32 *)ep0_d.host;
         input[0] = 0U;
         input[1] = (1U << 0) | (1U << 1);
         slot[0] = (1U << 27) | ((UINT32)speed << 20);
@@ -665,6 +664,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         epctx[2] = (UINT32)ep0_d.dev | 1U;
         epctx[3] = (UINT32)(ep0_d.dev >> 32);
         epctx[4] = 8U;
+        ep0 = (UINT32 *)ep0_d.host;
         ep0[(4096U / 4U) - 4U] = (UINT32)ep0_d.dev;
         ep0[(4096U / 4U) - 3U] = (UINT32)(ep0_d.dev >> 32);
         ep0[(4096U / 4U) - 2U] = 0U;
@@ -673,12 +673,14 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
         dcbaa[slot_id] = output_d.dev;
     }
 
+    /* Publish Address Device only after Enable Slot has completed. */
     cr[4] = (UINT32)input_d.dev;
     cr[5] = (UINT32)(input_d.dev >> 32);
     cr[6] = 0U;
     cr[7] = TRB_CYCLE | (V32_TRB_ADDRESS_DEVICE << TRB_TYPE_SHIFT) |
             ((UINT32)slot_id << 24);
-    s = mw32(p, db, 0U); ++writes;
+    s = mw32(p, db, 0U);
+    ++writes;
     if (EFI_ERROR(s)) goto out;
     Print(u"ADDRESS DEVICE: COMMAND DOORBELL=0 INPUT=%016lx EP0-MPS=8 AVG-TRB=8\r\n",
           input_d.dev);
