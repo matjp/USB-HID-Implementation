@@ -20,21 +20,24 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           python3 - <<'PY'
           from pathlib import Path
-          import re
           p = Path('efi/xhci_mmio_v32.c')
-          s = p.read_text()
-          pattern = re.compile(
-              r'\n    \{\n'
-              r'        UINT32 after_reset = 0;\n'
-              r'.*?'
-              r'    \}\n'
-              r'    Print\(u"PORT RESET: ASSERTED / WAITING\\r\\n"\);',
-              re.S)
-          replacement = '\n    Print(u"PORT RESET: ASSERTED / WAITING\\r\\n");'
-          s2, n = pattern.subn(replacement, s, count=1)
-          if n != 1:
+          lines = p.read_text().splitlines(True)
+          start = None
+          end = None
+          for i, line in enumerate(lines):
+              if 'UINT32 after_reset = 0;' in line:
+                  start = i - 1
+                  break
+          if start is None:
               raise SystemExit('V32 temporary reset diagnostics not found')
-          p.write_text(s2)
+          for i in range(start, len(lines)):
+              if 'PORT RESET: ASSERTED / WAITING' in lines[i]:
+                  end = i
+                  break
+          if end is None or end <= start:
+              raise SystemExit('V32 reset diagnostic end marker not found')
+          del lines[start:end]
+          p.write_text(''.join(lines))
           PY
           git diff --check
           ! grep -q 'RESET OBSERVE:' efi/xhci_mmio_v32.c
