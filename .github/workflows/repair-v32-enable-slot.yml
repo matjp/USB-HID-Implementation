@@ -1,0 +1,68 @@
+name: Repair V32 Enable Slot handling
+on:
+  push:
+    paths:
+      - ".github/workflows/repair-v32-enable-slot.yml"
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fix V32 Enable Slot handling
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('efi/xhci_mmio_v32.c')
+          s = p.read_text()
+
+          old = '    cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT);\n'
+          new = '    cr[3] = TRB_CYCLE | (TRB_ENABLE_SLOT << TRB_TYPE_SHIFT) |\n            ((UINT32)slot_type << 16);\n'
+          if old not in s:
+              raise SystemExit('Enable Slot TRB pattern not found')
+          s = s.replace(old, new, 1)
+
+          old = '''            else\n                match = match && cc == CC_SUCCESS && ptr == trb_ptr &&\n                        event_slot == slot_expected;\n'''
+          new = '''            else\n                match = match && cc == CC_SUCCESS && ptr == trb_ptr &&\n                        (slot_expected == 0U || event_slot == slot_expected);\n'''
+          if old not in s:
+              raise SystemExit('command event match pattern not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,\n                       0, cr_d.dev, (UINT8)max_slots, &slot_id,\n'''
+          new = '''    s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_COMMAND_COMPLETION,\n                       0, cr_d.dev, 0, &slot_id,\n'''
+          if old not in s:
+              raise SystemExit('Enable Slot wait call pattern not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          grep -q '((UINT32)slot_type << 16)' efi/xhci_mmio_v32.c
+          grep -q '(slot_expected == 0U || event_slot == slot_expected)' efi/xhci_mmio_v32.c
+          git add efi/xhci_mmio_v32.c
+          git commit -m "Fix V32 Enable Slot completion and slot type"
+          git push
+
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build-efi.yml/dispatches" \
+            -d '{"ref":"main","inputs":{"test_id":"v32","source":"efi/xhci_mmio_v32.c","label":"xHCI V32 / Gate 6 / PORT RESET + ADDRESS DEVICE"}}'
+      - name: Remove helper workflow
+        run: |
+          set -euxo pipefail
+          rm -f .github/workflows/repair-v32-enable-slot.yml
+          git add .github/workflows/repair-v32-enable-slot.yml
+          git commit -m "Remove temporary V32 Enable Slot repair workflow"
+          git push
