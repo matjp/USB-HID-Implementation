@@ -88,24 +88,21 @@ static BOOLEAN v32_is_keyboard(const EFI_USB_INTERFACE_DESCRIPTOR *d)
            d->InterfaceProtocol == 0x01U;
 }
 
-static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path, UINT8 *usb_nodes)
+/* UEFI discovery producer helper: resolve the selected interface to its
+ * parent USB port before ownership is handed to the bridge. */
+static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path)
 {
     UINT8 *p = (UINT8 *)path;
-    UINT8 root = 0;
-    UINT8 count = 0;
+    UINT8 root = 0xffU;
     while (p) {
         EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
         UINT16 len = (UINT16)h->Length[0] | ((UINT16)h->Length[1] << 8);
         if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL) || h->Type == 0x7fU)
             break;
-        if (h->Type == 0x03U && h->SubType == 0x05U && len >= 6U) {
+        if (h->Type == 0x03U && h->SubType == 0x05U && len >= 6U)
             root = p[4];
-            ++count;
-            Print(u"DP USB NODE: PORT=%u IF=%u\r\n", p[4], p[5]);
-        }
         p += len;
     }
-    *usb_nodes = count;
     return root;
 }
 
@@ -147,8 +144,8 @@ static EFI_STATUS v32_pci_match(EFI_HANDLE controller,
     return EFI_SUCCESS;
 }
 
-static EFI_STATUS v32_discover(EFI_HANDLE image, V32_HANDOFF *h,
-                               EFI_HANDLE *controller)
+static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
+                                      EFI_HANDLE *controller)
 {
     EFI_HANDLE *usb_handles = NULL;
     UINTN count = 0, i, keyboards = 0;
@@ -164,7 +161,7 @@ static EFI_STATUS v32_discover(EFI_HANDLE image, V32_HANDOFF *h,
         EFI_USB_ENDPOINT_DESCRIPTOR ep;
         EFI_DEVICE_PATH_PROTOCOL *path = NULL;
         EFI_HANDLE ch = NULL;
-        UINT8 nodes = 0, root;
+        UINT8 root;
         UINTN e, eps;
         BOOLEAN got_in = FALSE;
 
@@ -190,14 +187,10 @@ static EFI_STATUS v32_discover(EFI_HANDLE image, V32_HANDOFF *h,
             FreePool(usb_handles);
             return s;
         }
-        root = v32_root_port(path, &nodes);
-        Print(u"DP ROOT=%u USB-NODES=%u FIRST-TYPE=%02x FIRST-SUB=%02x FIRST-LEN=%u\r\n",
-              root, nodes, path ? ((UINT8 *)path)[0] : 0,
-              path ? ((UINT8 *)path)[1] : 0,
-              path ? (UINT16)((UINT8 *)path)[2] | ((UINT16)((UINT8 *)path)[3] << 8) : 0);
-        if (nodes != 1U) {
-            s = EFI_UNSUPPORTED;
-            v32_fail(u"DISCOVERY", u"DIRECT ROOT PORT", s);
+        root = v32_root_port(path);
+        if (root == 0xffU) {
+            s = EFI_NOT_FOUND;
+            v32_fail(u"DISCOVERY", u"ROOT PORT", s);
             FreePool(usb_handles);
             return s;
         }
@@ -465,7 +458,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     Print(u"TOSHIBA xHCI V32 / GATE 6 / PORT RESET + ADDRESS DEVICE\r\n");
     Print(u"UEFI KEYBOARD -> QUIESCE -> FRESH xHCI / LS+FS ONLY\r\n");
 
-    s = v32_discover(image, &h, &controller);
+    /* Phase A: UEFI discovery producer. Everything below consumes only the
+       completed handoff and controller handle; it performs no USB discovery. */
+    s = v32_produce_handoff(image, &h, &controller);
     if (EFI_ERROR(s)) goto out;
     b = h;
     Print(u"UEFI SELECT: VID=%04x PID=%04x PORT=%u IF=%u EP=%02x EP0DESC=%u\r\n",
