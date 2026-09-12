@@ -82,4 +82,8 @@ This deliberately avoids introducing a disk file, UEFI variable, firmware NVRAM 
 
 The handoff should identify the PCI controller path associated with the selected USB device sufficiently to bind the bridge to the corresponding xHCI controller. The bridge may discover xHCI controllers through PCI, as required by D002, but it must not simply select the first matching xHCI controller when the UEFI handoff identifies another controller. No machine-specific PCI address is hard-coded.
 
-UEFI PCI device paths define a path through PCI device/function nodes, and `EFI_PCI_IO_PROTOCOL.GetLocation()` can provide the PCI segment, bus, device and function for a controller. These are suitable discovery constraints rather than assumptions about a fixed platform address. 
+UEFI PCI device paths define a path through PCI device/function nodes, and `EFI_PCI_IO_PROTOCOL.GetLocation()` can provide the PCI segment, bus, device and function for a controller. These are suitable discovery constraints rather than assumptions about a fixed platform address.
+
+## D020 — Gate 6 is limited to USB2-compatible Low/Full Speed HID
+
+The first live-device Gate 6 path deliberately supports only a keyboard whose selected xHCI port is operating on the USB2-compatible path at Low Speed or Full Speed. High-Speed and SuperSpeed device operation, including USB3-specific warm-reset handling, are outside Gate 6. The implementation must read the live xHCI PORTSC speed after controller start/reset and use that live value for xHCI context construction; the UEFI-discovered speed is an expectation/evidence field rather than the final authority. A keyboard plugged into a USB3-capable connector is not treated as a SuperSpeed device merely because of the connector; the device's negotiated xHCI port state determines the path.
