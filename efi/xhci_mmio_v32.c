@@ -29,8 +29,9 @@
 #define V32_USB_SPEED_FULL          1U
 #define V32_USB_SPEED_LOW           2U
 #define V32_HANDOFF_MAGIC           0x48494458U
-#define V32_HANDOFF_VERSION         1U
+#define V32_HANDOFF_VERSION         2U
 #define V32_MAX_ENDPOINTS           8U
+#define V32_MAX_PATH_BYTES          512U
 
 typedef struct {
     UINT8  endpoint_address;
@@ -38,6 +39,12 @@ typedef struct {
     UINT16 max_packet_size;
     UINT8  interval;
 } V32_ENDPOINT;
+
+typedef struct {
+    UINT16 size;
+    UINT16 reserved;
+    UINT8  data[V32_MAX_PATH_BYTES];
+} V32_DEVICE_PATH;
 
 typedef struct {
     UINT8  kind;
@@ -57,7 +64,10 @@ typedef struct {
     UINT8  interval;
     UINT8  reserved1;
     V32_ENDPOINT endpoints[V32_MAX_ENDPOINTS];
-} V32_KEYBOARD;
+    V32_DEVICE_PATH device_path;
+} V32_HID_DEVICE;
+
+typedef V32_HID_DEVICE V32_KEYBOARD;
 
 typedef struct {
     UINT32 magic;
@@ -71,7 +81,9 @@ typedef struct {
     UINT8  reserved0;
     UINT16 pci_vendor;
     UINT16 pci_device_id;
-    V32_KEYBOARD keyboard;
+    V32_DEVICE_PATH controller_path;
+    V32_HID_DEVICE keyboard;
+    V32_HID_DEVICE mouse;
 } V32_HANDOFF;
 
 static EFI_GUID V32_UsbIoGuid = EFI_USB_IO_PROTOCOL_GUID;
@@ -94,15 +106,21 @@ static void v32_restore_cpu_interrupts(UINT64 flags)
         __asm__ __volatile__("sti" ::: "memory");
 }
 
-static BOOLEAN v32_is_keyboard(const EFI_USB_INTERFACE_DESCRIPTOR *d)
+static BOOLEAN v32_is_hid(const EFI_USB_INTERFACE_DESCRIPTOR *d, UINT8 *kind)
 {
-    return d->InterfaceClass == 0x03U &&
-           d->InterfaceSubClass == 0x01U &&
-           d->InterfaceProtocol == 0x01U;
+    if (d->InterfaceClass != 0x03U || d->InterfaceSubClass != 0x01U)
+        return FALSE;
+    if (d->InterfaceProtocol == 0x01U) {
+        *kind = 1U;
+        return TRUE;
+    }
+    if (d->InterfaceProtocol == 0x02U) {
+        *kind = 2U;
+        return TRUE;
+    }
+    return FALSE;
 }
 
-/* UEFI discovery producer helper: resolve the selected interface to its
- * parent USB port before ownership is handed to the bridge. */
 static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path)
 {
     UINT8 *p = (UINT8 *)path;
@@ -119,12 +137,120 @@ static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path)
     return root;
 }
 
-static EFI_STATUS v32_find_controller(EFI_DEVICE_PATH_PROTOCOL *path,
-                                      EFI_HANDLE *controller)
+static EFI_STATUS v32_path_size(EFI_DEVICE_PATH_PROTOCOL *path, UINTN *size)
 {
-    EFI_DEVICE_PATH_PROTOCOL *lookup = path;
-    return uefi_call_wrapper(BS->LocateDevicePath, 3, &PciGuid,
-                              &lookup, controller);
+    UINT8 *p = (UINT8 *)path;
+    UINTN total = 0;
+    if (!path || !size) return EFI_INVALID_PARAMETER;
+    while (total <= V32_MAX_PATH_BYTES - sizeof(EFI_DEVICE_PATH_PROTOCOL)) {
+        EFI_DEVICE_PATH_PROTOCOL *h = (EFI_DEVICE_PATH_PROTOCOL *)p;
+        UINT16 len = (UINT16)h->Length[0] | ((UINT16)h->Length[1] << 8);
+        if (len < sizeof(EFI_DEVICE_PATH_PROTOCOL)) return EFI_DEVICE_ERROR;
+        if (total + len > V32_MAX_PATH_BYTES) return EFI_BAD_BUFFER_SIZE;
+        total += len;
+        if (h->Type == 0x7fU) {
+            *size = total;
+            return EFI_SUCCESS;
+        }
+        p += len;
+    }
+    return EFI_BAD_BUFFER_SIZE;
+}
+
+static EFI_STATUS v32_copy_path(V32_DEVICE_PATH *dst, EFI_DEVICE_PATH_PROTOCOL *path)
+{
+    UINTN size = 0;
+    EFI_STATUS s;
+    if (!dst || !path) return EFI_INVALID_PARAMETER;
+    s = v32_path_size(path, &size);
+    if (EFI_ERROR(s)) return s;
+    uefi_call_wrapper(BS->SetMem, 3, dst, sizeof(*dst), 0);
+    CopyMem(dst->data, path, size);
+    dst->size = (UINT16)size;
+    return EFI_SUCCESS;
+}
+
+static BOOLEAN v32_path_equals(const V32_DEVICE_PATH *expected,
+                               EFI_DEVICE_PATH_PROTOCOL *actual)
+{
+    UINTN size = 0;
+    if (!expected || !expected->size || expected->size > V32_MAX_PATH_BYTES || !actual)
+        return FALSE;
+    if (EFI_ERROR(v32_path_size(actual, &size)) || size != expected->size)
+        return FALSE;
+    return CompareMem(expected->data, actual, size) == 0;
+}
+
+static BOOLEAN v32_pci_path_prefix(EFI_DEVICE_PATH_PROTOCOL *pci_path,
+                                   EFI_DEVICE_PATH_PROTOCOL *usb_path,
+                                   UINTN *matched)
+{
+    UINT8 *p = (UINT8 *)pci_path;
+    UINT8 *q = (UINT8 *)usb_path;
+    UINTN total = 0;
+    if (!p || !q) return FALSE;
+    for (;;) {
+        EFI_DEVICE_PATH_PROTOCOL *a = (EFI_DEVICE_PATH_PROTOCOL *)p;
+        EFI_DEVICE_PATH_PROTOCOL *b = (EFI_DEVICE_PATH_PROTOCOL *)q;
+        UINT16 alen = (UINT16)a->Length[0] | ((UINT16)a->Length[1] << 8);
+        UINT16 blen = (UINT16)b->Length[0] | ((UINT16)b->Length[1] << 8);
+        if (alen < sizeof(EFI_DEVICE_PATH_PROTOCOL) ||
+            blen < sizeof(EFI_DEVICE_PATH_PROTOCOL))
+            return FALSE;
+        if (a->Type == 0x7fU) {
+            if (matched) *matched = total;
+            return TRUE;
+        }
+        if (b->Type == 0x7fU || alen != blen || CompareMem(a, b, alen) != 0)
+            return FALSE;
+        total += alen;
+        p += alen;
+        q += blen;
+    }
+}
+
+/* UEFI discovery producer: identify the PCI controller whose complete device
+ * path is the longest prefix of the selected USB interface path. */
+static EFI_STATUS v32_find_controller(EFI_DEVICE_PATH_PROTOCOL *usb_path,
+                                       EFI_HANDLE *controller)
+{
+    EFI_HANDLE *pci_handles = NULL;
+    UINTN pci_count = 0, i, best_len = 0;
+    EFI_HANDLE best = NULL;
+    EFI_STATUS s;
+
+    if (!usb_path || !controller) return EFI_INVALID_PARAMETER;
+    s = LibLocateHandle(ByProtocol, &PciGuid, NULL, &pci_count, &pci_handles);
+    if (EFI_ERROR(s)) return s;
+
+    for (i = 0; i < pci_count; ++i) {
+        EFI_DEVICE_PATH_PROTOCOL *pci_path = NULL;
+        UINTN matched = 0;
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, pci_handles[i],
+                              &DevicePathProtocol, (VOID **)&pci_path,
+                              NULL, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(s) || !pci_path) continue;
+        if (v32_pci_path_prefix(pci_path, usb_path, &matched) && matched > best_len) {
+            best_len = matched;
+            best = pci_handles[i];
+        }
+    }
+    FreePool(pci_handles);
+    if (!best) return EFI_NOT_FOUND;
+    *controller = best;
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS v32_validate_controller_path(EFI_HANDLE controller,
+                                               const V32_DEVICE_PATH *expected)
+{
+    EFI_DEVICE_PATH_PROTOCOL *actual = NULL;
+    EFI_STATUS s;
+    s = uefi_call_wrapper(BS->OpenProtocol, 6, controller,
+                          &DevicePathProtocol, (VOID **)&actual,
+                          NULL, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+    if (EFI_ERROR(s)) return s;
+    return v32_path_equals(expected, actual) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }
 
 static EFI_STATUS v32_pci_match(EFI_HANDLE controller,
@@ -157,11 +283,66 @@ static EFI_STATUS v32_pci_match(EFI_HANDLE controller,
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS v32_fill_hid(EFI_USB_IO_PROTOCOL *usb,
+                               EFI_USB_INTERFACE_DESCRIPTOR *iface,
+                               EFI_DEVICE_PATH_PROTOCOL *path,
+                               UINT8 kind, V32_HID_DEVICE *d)
+{
+    EFI_USB_DEVICE_DESCRIPTOR dd;
+    EFI_USB_CONFIG_DESCRIPTOR cd;
+    EFI_USB_ENDPOINT_DESCRIPTOR ep;
+    UINTN e, eps;
+    BOOLEAN got_in = FALSE;
+    EFI_STATUS s;
+
+    uefi_call_wrapper(BS->SetMem, 3, d, sizeof(*d), 0);
+    d->kind = kind;
+    d->root_port = v32_root_port(path);
+    if (d->root_port == 0xffU) return EFI_NOT_FOUND;
+    d->interface_number = iface->InterfaceNumber;
+    d->interface_protocol = iface->InterfaceProtocol;
+    d->endpoint_count = iface->NumEndpoints;
+    if (d->endpoint_count > V32_MAX_ENDPOINTS)
+        d->endpoint_count = V32_MAX_ENDPOINTS;
+    s = v32_copy_path(&d->device_path, path);
+    if (EFI_ERROR(s)) return s;
+
+    if (!EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 3, usb, &dd))) {
+        d->vendor_id = dd.IdVendor;
+        d->product_id = dd.IdProduct;
+        d->bcd_usb = dd.BcdUSB;
+        d->ep0_mps_descriptor = dd.MaxPacketSize0;
+    }
+    if (!EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 3, usb, &cd)))
+        d->configuration_value = cd.ConfigurationValue;
+
+    eps = d->endpoint_count;
+    for (e = 0; e < eps; ++e) {
+        if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetEndpointDescriptor, 4,
+                                         usb, (UINT8)e, &ep)))
+            continue;
+        d->endpoints[e].endpoint_address = ep.EndpointAddress;
+        d->endpoints[e].attributes = ep.Attributes;
+        d->endpoints[e].max_packet_size = ep.MaxPacketSize;
+        d->endpoints[e].interval = ep.Interval;
+        if (!got_in && ep.DescriptorType == 0x05U && ep.Length >= 7U &&
+            (ep.EndpointAddress & 0x80U) &&
+            (ep.Attributes & 0x03U) == 0x03U &&
+            ep.MaxPacketSize != 0U && ep.Interval != 0U) {
+            d->interrupt_in_endpoint = ep.EndpointAddress;
+            d->interrupt_max_packet_size = ep.MaxPacketSize;
+            d->interval = ep.Interval;
+            got_in = TRUE;
+        }
+    }
+    return got_in ? EFI_SUCCESS : EFI_UNSUPPORTED;
+}
+
 static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
                                       EFI_HANDLE *controller)
 {
     EFI_HANDLE *usb_handles = NULL;
-    UINTN count = 0, i, keyboards = 0;
+    UINTN count = 0, i, keyboards = 0, mice = 0;
     EFI_STATUS s = LibLocateHandle(ByProtocol, &V32_UsbIoGuid, NULL,
                                    &count, &usb_handles);
     if (EFI_ERROR(s)) return EFI_NOT_FOUND;
@@ -169,52 +350,37 @@ static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
     for (i = 0; i < count; ++i) {
         EFI_USB_IO_PROTOCOL *usb = NULL;
         EFI_USB_INTERFACE_DESCRIPTOR iface;
-        EFI_USB_DEVICE_DESCRIPTOR dd;
-        EFI_USB_CONFIG_DESCRIPTOR cd;
-        EFI_USB_ENDPOINT_DESCRIPTOR ep;
         EFI_DEVICE_PATH_PROTOCOL *path = NULL;
         EFI_HANDLE ch = NULL;
-        UINT8 root;
-        UINTN e, eps;
-        BOOLEAN got_in = FALSE;
+        UINT8 kind;
 
         if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, usb_handles[i],
                                          &V32_UsbIoGuid, (VOID **)&usb,
                                          image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL)))
             continue;
         if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetInterfaceDescriptor, 3,
-                                         usb, &iface)) || !v32_is_keyboard(&iface))
+                                         usb, &iface)) || !v32_is_hid(&iface, &kind))
             continue;
-        ++keyboards;
-        if (keyboards != 1U) {
-            s = EFI_ALREADY_STARTED;
-            v32_fail(u"DISCOVERY", u"MULTIPLE KEYBOARDS", s);
-            FreePool(usb_handles);
-            return s;
-        }
-        if (EFI_ERROR(uefi_call_wrapper(BS->OpenProtocol, 6, usb_handles[i],
-                                         &DevicePathProtocol, (VOID **)&path,
-                                         image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL))) {
-            s = EFI_NOT_FOUND;
+
+        s = uefi_call_wrapper(BS->OpenProtocol, 6, usb_handles[i],
+                              &DevicePathProtocol, (VOID **)&path,
+                              image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(s) || !path) {
             v32_fail(u"DISCOVERY", u"DEVICE PATH", s);
             FreePool(usb_handles);
-            return s;
+            return EFI_NOT_FOUND;
         }
-        root = v32_root_port(path);
-        if (root == 0xffU) {
-            s = EFI_NOT_FOUND;
-            v32_fail(u"DISCOVERY", u"ROOT PORT", s);
-            FreePool(usb_handles);
-            return s;
-        }
+
         s = v32_find_controller(path, &ch);
         if (EFI_ERROR(s) || !ch) {
             v32_fail(u"DISCOVERY", u"PCI CONTROLLER", s);
             FreePool(usb_handles);
-            return EFI_NOT_FOUND;
+            return s;
         }
-        {
+
+        if (!*controller) {
             EFI_PCI_IO_PROTOCOL *pci = NULL;
+            EFI_DEVICE_PATH_PROTOCOL *cpath = NULL;
             UINTN sg = 0, b = 0, d = 0, f = 0;
             UINT32 id = 0, cls = 0;
             s = uefi_call_wrapper(BS->OpenProtocol, 6, ch, &PciGuid,
@@ -230,12 +396,6 @@ static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
             }
             s = cfg32(pci, 0x00, &id);
             if (EFI_ERROR(s)) { FreePool(usb_handles); return s; }
-            h->pci_segment = (UINT16)sg;
-            h->pci_bus = (UINT8)b;
-            h->pci_device = (UINT8)d;
-            h->pci_function = (UINT8)f;
-            h->pci_vendor = (UINT16)(id & 0xffffU);
-            h->pci_device_id = (UINT16)(id >> 16);
             s = cfg32(pci, 0x08, &cls);
             if (EFI_ERROR(s) || ((cls >> 24) & 0xffU) != 0x0cU ||
                 ((cls >> 16) & 0xffU) != 0x03U ||
@@ -245,56 +405,69 @@ static EFI_STATUS v32_produce_handoff(EFI_HANDLE image, V32_HANDOFF *h,
                 FreePool(usb_handles);
                 return s;
             }
-        }
-        h->keyboard.kind = 1U;
-        h->keyboard.root_port = root;
-        h->keyboard.interface_number = iface.InterfaceNumber;
-        h->keyboard.interface_protocol = iface.InterfaceProtocol;
-        h->keyboard.endpoint_count = iface.NumEndpoints;
-        if (h->keyboard.endpoint_count > V32_MAX_ENDPOINTS)
-            h->keyboard.endpoint_count = V32_MAX_ENDPOINTS;
-        if (!EFI_ERROR(uefi_call_wrapper(usb->UsbGetDeviceDescriptor, 3,
-                                          usb, &dd))) {
-            h->keyboard.vendor_id = dd.IdVendor;
-            h->keyboard.product_id = dd.IdProduct;
-            h->keyboard.bcd_usb = dd.BcdUSB;
-            h->keyboard.ep0_mps_descriptor = dd.MaxPacketSize0;
-        }
-        if (!EFI_ERROR(uefi_call_wrapper(usb->UsbGetConfigDescriptor, 3,
-                                          usb, &cd)))
-            h->keyboard.configuration_value = cd.ConfigurationValue;
-        eps = h->keyboard.endpoint_count;
-        for (e = 0; e < eps; ++e) {
-            if (EFI_ERROR(uefi_call_wrapper(usb->UsbGetEndpointDescriptor, 4,
-                                             usb, (UINT8)e, &ep)))
-                continue;
-            h->keyboard.endpoints[e].endpoint_address = ep.EndpointAddress;
-            h->keyboard.endpoints[e].attributes = ep.Attributes;
-            h->keyboard.endpoints[e].max_packet_size = ep.MaxPacketSize;
-            h->keyboard.endpoints[e].interval = ep.Interval;
-            if (!got_in && ep.DescriptorType == 0x05U && ep.Length >= 7U &&
-                (ep.EndpointAddress & 0x80U) &&
-                (ep.Attributes & 0x03U) == 0x03U &&
-                ep.MaxPacketSize != 0U && ep.Interval != 0U) {
-                h->keyboard.interrupt_in_endpoint = ep.EndpointAddress;
-                h->keyboard.interrupt_max_packet_size = ep.MaxPacketSize;
-                h->keyboard.interval = ep.Interval;
-                got_in = TRUE;
+            s = uefi_call_wrapper(BS->OpenProtocol, 6, ch,
+                                  &DevicePathProtocol, (VOID **)&cpath,
+                                  image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+            if (EFI_ERROR(s) || !cpath) {
+                v32_fail(u"DISCOVERY", u"CONTROLLER PATH", s);
+                FreePool(usb_handles);
+                return EFI_NOT_FOUND;
             }
-        }
-        if (!got_in) {
+            s = v32_copy_path(&h->controller_path, cpath);
+            if (EFI_ERROR(s)) {
+                v32_fail(u"DISCOVERY", u"CONTROLLER PATH COPY", s);
+                FreePool(usb_handles);
+                return s;
+            }
+            h->pci_segment = (UINT16)sg;
+            h->pci_bus = (UINT8)b;
+            h->pci_device = (UINT8)d;
+            h->pci_function = (UINT8)f;
+            h->pci_vendor = (UINT16)(id & 0xffffU);
+            h->pci_device_id = (UINT16)(id >> 16);
+            *controller = ch;
+        } else if (ch != *controller) {
             s = EFI_UNSUPPORTED;
-            v32_fail(u"DISCOVERY", u"INTERRUPT-IN", s);
+            v32_fail(u"DISCOVERY", u"MULTIPLE XHCI CONTROLLERS", s);
             FreePool(usb_handles);
             return s;
         }
-        h->device_count = 1U;
-        *controller = ch;
+
+        if (kind == 1U) {
+            ++keyboards;
+            if (keyboards != 1U) {
+                s = EFI_ALREADY_STARTED;
+                v32_fail(u"DISCOVERY", u"MULTIPLE KEYBOARDS", s);
+                FreePool(usb_handles);
+                return s;
+            }
+            s = v32_fill_hid(usb, &iface, path, kind, &h->keyboard);
+        } else {
+            ++mice;
+            if (mice != 1U) {
+                s = EFI_ALREADY_STARTED;
+                v32_fail(u"DISCOVERY", u"MULTIPLE MICE", s);
+                FreePool(usb_handles);
+                return s;
+            }
+            s = v32_fill_hid(usb, &iface, path, kind, &h->mouse);
+        }
+        if (EFI_ERROR(s)) {
+            v32_fail(u"DISCOVERY", kind == 1U ? u"KEYBOARD ENDPOINT" : u"MOUSE ENDPOINT", s);
+            FreePool(usb_handles);
+            return s;
+        }
+    }
+
+    h->device_count = (UINT16)(keyboards + mice);
+    if (keyboards != 1U || h->device_count == 0U || h->device_count > 2U) {
+        s = keyboards ? EFI_DEVICE_ERROR : EFI_NOT_FOUND;
+        v32_fail(u"DISCOVERY", u"SELECTED HID SET", s);
         FreePool(usb_handles);
-        return EFI_SUCCESS;
+        return s;
     }
     FreePool(usb_handles);
-    return EFI_NOT_FOUND;
+    return EFI_SUCCESS;
 }
 
 static EFI_STATUS v32_supported_protocol(EFI_PCI_IO_PROTOCOL *p, UINT32 hcc,
@@ -471,24 +644,31 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     h.size = sizeof(h);
 
     Print(u"TOSHIBA xHCI V32 / GATE 6 / PORT RESET + ADDRESS DEVICE\r\n");
-    Print(u"UEFI KEYBOARD -> QUIESCE -> FRESH xHCI / LS+FS ONLY\r\n");
+    Print(u"UEFI KEYBOARD + MOUSE -> QUIESCE -> FRESH xHCI / LS+FS ONLY\r\n");
 
     /* Phase A: UEFI discovery producer. Everything below consumes only the
        completed handoff and controller handle; it performs no USB discovery. */
     s = v32_produce_handoff(image, &h, &controller);
     if (EFI_ERROR(s)) goto out;
     b = h;
-    Print(u"UEFI SELECT: VID=%04x PID=%04x PORT=%u IF=%u EP=%02x EP0DESC=%u\r\n",
+    Print(u"UEFI KEYBOARD: VID=%04x PID=%04x PORT=%u IF=%u EP=%02x EP0DESC=%u\r\n",
           b.keyboard.vendor_id, b.keyboard.product_id, b.keyboard.root_port,
           b.keyboard.interface_number, b.keyboard.interrupt_in_endpoint,
           b.keyboard.ep0_mps_descriptor);
-    Print(u"HANDOFF: MAGIC=%08x VERSION=%u SIZE=%u DEVICES=%u\r\n",
-          b.magic, b.version, b.size, b.device_count);
+    if (b.mouse.kind == 2U)
+        Print(u"UEFI MOUSE: VID=%04x PID=%04x PORT=%u IF=%u EP=%02x\r\n",
+              b.mouse.vendor_id, b.mouse.product_id, b.mouse.root_port,
+              b.mouse.interface_number, b.mouse.interrupt_in_endpoint);
+    Print(u"HANDOFF: MAGIC=%08x VERSION=%u SIZE=%u DEVICES=%u CONTROLLER-PATH=%u\r\n",
+          b.magic, b.version, b.size, b.device_count, b.controller_path.size);
     Print(u"CONTROLLER: %04x:%02x:%02x.%x %04x:%04x\r\n",
           b.pci_segment, b.pci_bus, b.pci_device, b.pci_function,
           b.pci_vendor, b.pci_device_id);
     if (b.magic != V32_HANDOFF_MAGIC || b.version != V32_HANDOFF_VERSION ||
-        b.size != sizeof(b) || b.device_count != 1U || b.keyboard.kind != 1U) {
+        b.size != sizeof(b) || b.device_count < 1U || b.device_count > 2U ||
+        b.keyboard.kind != 1U ||
+        (b.mouse.kind != 0U && b.mouse.kind != 2U) ||
+        !b.controller_path.size || !b.keyboard.device_path.size) {
         s = EFI_INVALID_PARAMETER;
         v32_fail(u"HANDOFF", u"VALIDATION", s);
         goto out;
@@ -500,6 +680,9 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     Print(u"UEFI USB STACK QUIESCED / DISCONNECT=PASS\r\n");
     saved_rflags = v32_disable_cpu_interrupts();
     cpu_interrupts_disabled = TRUE;
+
+    s = v32_validate_controller_path(controller, &b.controller_path);
+    if (EFI_ERROR(s)) { v32_fail(u"BIND", u"CONTROLLER PATH", s); goto out; }
 
     s = v32_pci_match(controller, b.pci_segment, b.pci_bus,
                       b.pci_device, b.pci_function,
@@ -726,6 +909,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
             s = EFI_DEVICE_ERROR; v32_fail(u"ADDRESS", u"ADDRESSED STATE", s); goto out;
         }
         Print(u"ADDRESS DEVICE: SUCCESS STATE=ADDRESSED(%u) USB-ADDR=%u PASS\r\n", state, addr);
+        (void)stride;
     }
 
     s = mr32(p, op, &cmd); ++reads; if (EFI_ERROR(s)) goto out;
