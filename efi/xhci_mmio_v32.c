@@ -582,7 +582,13 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     cr[(CMD_TRBS - 1U) * 4U + 2U] = 0;
     cr[(CMD_TRBS - 1U) * 4U + 3U] = TRB_CYCLE | TRB_LINK_TOGGLE |
                                      (TRB_LINK << TRB_TYPE_SHIFT);
-    erst[0] = ev_d.dev; erst[1] = 0; erst[2] = EVENT_TRBS; erst[3] = 0;
+    {
+        UINT32 *erst32 = (UINT32 *)erst;
+        erst32[0] = (UINT32)ev_d.dev;
+        erst32[1] = (UINT32)(ev_d.dev >> 32);
+        erst32[2] = EVENT_TRBS;
+        erst32[3] = 0U;
+    }
 
     s = mw64(p, op + 0x30U, dcbaa_d.dev); writes += 2; if (EFI_ERROR(s)) goto out;
     s = mw32(p, op + 0x38U, 1U); ++writes; if (EFI_ERROR(s)) goto out;
