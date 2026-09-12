@@ -8,7 +8,7 @@ Each gate has a narrow objective and explicit exit criteria. A failed or ambiguo
 
 The progression is:
 
-`V28 discovery -> V29 halted initialization -> V30 controller run/halt/recovery -> V31 Enable Slot/completion -> V32 UEFI-selected keyboard + Port Reset/Address Device -> later versions extend the same implementation`
+`V28 discovery -> V29 halted initialization -> V30 controller run/halt/recovery -> V31 Enable Slot/completion -> V32 UEFI-selected keyboard + USB2 low/full-speed Port Reset/Address Device -> later versions extend the same implementation`
 
 A hardware result is evidence for the **cumulative implementation** in that version, not merely for the newly added operation. An isolated replacement test does not constitute progression of the implementation.
 
@@ -83,6 +83,8 @@ Reference: Intel xHCI Specification, command completion/event-ring requirements;
 
 Gate 6 is cumulative. V32 must retain the complete proven V28/V29/V30/V31 implementation and add the first live USB-device operations. The target is one pre-connected USB HID boot-protocol keyboard interface. The physical device may be a composite receiver, including a combined wireless keyboard/mouse dongle; only the keyboard interface is exercised in this gate.
 
+Gate 6 deliberately targets a keyboard that enumerates through the controller's USB2-compatible path at Low Speed or Full Speed. High-Speed and SuperSpeed device operation, including USB3-specific warm-reset handling, are outside this gate. The implementation uses the live xHCI port state to determine the actual speed; it does not assume that a physical USB3-capable connector implies a SuperSpeed keyboard.
+
 The Gate 6 EFI image has two explicit logical stages:
 
 `UEFI discovery producer -> bounded handoff -> V32 bridge consumer -> fresh xHCI state`
@@ -97,7 +99,7 @@ The UEFI producer should also identify the PCI controller path associated with t
 
 The cumulative V32 sequence is:
 
-`UEFI discovery -> handoff validation/normalization -> halt -> reset -> CNR clear -> validate caps -> bind corresponding xHCI controller -> allocate/map DMA -> program CONFIG/DCBAAP/CRCR/primary event ring -> start xHCI -> verify HCH=0 -> select handoff root port -> verify connected -> port reset -> consume/validate port-status change -> Enable Slot -> completion -> allocate/initialize fresh device contexts -> DCBAA[slot] -> Address Device -> completion -> validate addressed/default state -> halt/reset -> clear controller pointers -> release DMA`
+`UEFI discovery -> handoff validation/normalization -> halt -> reset -> CNR clear -> validate caps -> bind corresponding xHCI controller -> allocate/map DMA -> program CONFIG/DCBAAP/CRCR/primary event ring -> start xHCI -> verify HCH=0 -> select handoff root port -> verify connected -> determine live speed -> USB2-compatible port reset -> consume/validate port-status change -> verify Low/Full Speed post-reset state -> Enable Slot -> completion -> allocate/initialize fresh device contexts -> DCBAA[slot] -> Address Device -> completion -> validate addressed/default state -> halt/reset -> clear controller pointers -> release DMA`
 
 This first cumulative V32 stops after Address Device. Descriptors, SET_CONFIGURATION, Configure Endpoint, HID Set Protocol, keyboard reports, mouse traffic, hubs, hot-plug, MSI/MSI-X, CPU interrupt handlers, and continuous report polling remain later work.
 
@@ -109,13 +111,14 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 2. **UEFI boundary:** discovery occurs in the producer stage before active xHCI reconfiguration; the producer identifies the selected keyboard interface, root port, and controller path; the bridge consumes that record without scanning `EFI_USB_IO_PROTOCOL` itself. Do not hard-code port 4 or a machine-specific PCI BDF.
 3. **Handoff contract:** magic/version/size/bounds are validated; required fields are usable; the selected keyboard is unambiguous; controller identity is present and matchable; EP0 packet size is normalized before context construction; optional unavailable fields are not guessed.
 4. **Controller binding:** PCI discovery is retained for portability, but the selected controller is constrained by the UEFI handoff's controller identity/path. Multiple matching xHCI controllers must not cause an arbitrary first-match selection.
-5. **Port reset/state:** correct PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
-6. **Slot/context:** context-size selection from HCCPARAMS1, 64-byte/32-byte context layout as applicable, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
-7. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, normalized Max Packet Size 0, Transfer Ring Dequeue Pointer, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
-8. **DMA:** all contexts, rings, and controller-referenced buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared.
-9. **Failure safety:** after any command submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
-10. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout V32; poll the event ring directly as in V31.
-11. **No UEFI runtime-state reuse:** the bridge starts with a fresh controller state and does not depend on UEFI slot IDs, rings, contexts, DMA buffers, or run state.
+5. **Port protocol/speed:** the selected port's live PORTSC state is authoritative after controller start. Gate 6 accepts Low Speed or Full Speed only. High-Speed and SuperSpeed are rejected rather than introducing a second general-speed or USB3 reset path.
+6. **Port reset/state:** correct USB2-compatible PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
+7. **Slot/context:** context-size selection from HCCPARAMS1, 64-byte/32-byte context layout as applicable, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
+8. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, normalized Max Packet Size 0, Transfer Ring Dequeue Pointer, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
+9. **DMA:** all contexts, rings, and controller-referenced buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared.
+10. **Failure safety:** after any command submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
+11. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout V32; poll the event ring directly as in V31.
+12. **No UEFI runtime-state reuse:** the bridge starts with a fresh controller state and does not depend on UEFI slot IDs, rings, contexts, DMA buffers, or run state.
 
 ### Gate 6 acceptance criteria
 
@@ -124,7 +127,9 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 - The selected controller binding came from the handoff rather than first-match PCI enumeration.
 - No bridge-side keyboard-discovery scan was used.
 - The discovered root port is connected when the controller is started.
-- Port reset completes cleanly and the corresponding port-status change is consumed/validated.
+- The live port speed is Low Speed or Full Speed.
+- Port reset completes using the USB2-compatible path and the corresponding port-status change is consumed/validated.
+- The post-reset live PORTSC speed is used for Slot Context construction.
 - Enable Slot completion returns a valid fresh Slot ID.
 - Fresh device contexts are allocated and linked through the DCBAA.
 - Address Device completes successfully and the output device context reaches the expected addressed/default state.
