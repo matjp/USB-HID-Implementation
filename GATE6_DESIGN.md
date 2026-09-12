@@ -90,7 +90,7 @@ The producer must complete discovery and validate the handoff before the bridge 
 
 The discovery producer is operating while the firmware USB host-controller driver and USB bus driver own the xHCI controller through the UEFI driver model. The bridge must not reset, stop, or otherwise reconfigure the xHCI controller while those UEFI drivers remain active.
 
-After discovery and handoff-copy validation, the producer must explicitly request the UEFI USB stack to stop managing the selected xHCI controller before the bridge performs any active xHCI MMIO writes. The portable UEFI mechanism for this experiment is the Boot Services `DisconnectController()` operation on the selected controller handle, with `DriverImageHandle=NULL` and `ChildHandle=NULL`. This disconnects all drivers managing that controller and destroys all children of the controller. The implementation must verify that the disconnect succeeds and that the selected USB child/device handles are no longer being managed by the UEFI USB bus stack before proceeding.
+After discovery and handoff-copy validation, the producer must explicitly request the UEFI USB stack to stop managing the selected xHCI controller before the bridge performs any active xHCI MMIO writes. The portable UEFI mechanism for this experiment is the Boot Services `DisconnectController()` operation on the selected controller handle, with `DriverImageHandle=NULL` and `ChildHandle=NULL`. This disconnects all drivers managing that controller and destroys all children of the controller. The implementation must verify that the disconnect succeeds before proceeding.
 
 This is an ownership/quiesce transition only. It does not transfer or preserve UEFI xHCI runtime state for reuse. The UEFI stack is being stopped so the bridge can establish fresh xHCI state safely.
 
@@ -104,7 +104,9 @@ UEFI defines `DisconnectController()` so that a NULL DriverImageHandle disconnec
 
 After `DisconnectController()` succeeds, the bridge must query the selected `EFI_PCI_IO_PROTOCOL` controller attributes before performing DMA or relying on MMIO decode. It must ensure that the PCI `MEMORY` and `BUS_MASTER` attributes required for xHCI operation are enabled and supported, using `EFI_PCI_IO_PROTOCOL.Attributes()` rather than direct writes to the PCI command register.
 
-The implementation must record the original PCI attribute state before changing it and restore any attributes that the bridge enabled before successful return/teardown, provided the controller is left in a halted, non-DMA state. A failure to enable required attributes stops Gate 6 before controller initialization.
+The implementation must record the original PCI attribute state before changing it and restore any attributes that the bridge enabled before successful return/teardown, provided the controller is left in a halted, non-DMA state.
+
+A failure to enable required attributes stops Gate 6 before controller initialization.
 
 This is required because UEFI assigns responsibility for enabling PCI Memory and Bus Master attributes to the device driver and specifies that `Attributes()` is the interface for managing those controller attributes. The same specification defines the common-buffer DMA contract used by this project. citeturn420352search0turn337652search1
 
@@ -160,7 +162,23 @@ The handoff must identify the PCI controller path associated with the selected U
 
 The controller handle used for the UEFI ownership/quiesce step and the PCI I/O handle used for bridge MMIO/DMA access must refer to the same controller. The implementation must validate that correspondence before disconnecting the UEFI controller and again before active xHCI initialization.
 
-The baseline V29 implementation rejects a 64-bit-capable BAR if the BAR is not marked 64-bit, but that is an implementation choice from the earlier experiment, not an xHCI requirement. Gate 6 must not add a new 64-bit-BAR assumption: a valid 32-bit or 64-bit xHCI MMIO BAR is acceptable. The bridge must derive the actual MMIO base from the PCI BAR type and use UEFI PCI I/O MMIO access rather than relying on a hard-coded address.
+The baseline V29 implementation rejects a 64-bit-capable BAR if the BAR is not marked 64-bit, but that is an implementation choice from the earlier experiment, not an xHCI requirement. Gate 6 must not add a new 64-bit-BAR assumption: a valid 32-bit or 64-bit MMIO BAR is acceptable. The bridge must derive the actual MMIO base from the PCI BAR type and use UEFI PCI I/O MMIO access rather than relying on a hard-coded address.
+
+### 6.1 Platform-operation implementation requirements
+
+The existing `efi/xhci_bridge/efi_platform.c` is a scaffold, not a proven V32 platform layer, and must not be used unchanged. Its current implementation allocates DMA with `AllocatePages()` and assumes identity mapping, ignores requested alignment, frees one page regardless of the allocation size, and uses native 64-bit MMIO accesses. Those behaviors do not satisfy the project's proven V29 DMA contract or the deliberately conservative MMIO access model.
+
+Before V32 source is written, the platform layer used by V32 must instead:
+
+- allocate controller-referenced memory with `EFI_PCI_IO_PROTOCOL.AllocateBuffer()`;
+- map it with `EfiPciIoOperationBusMasterCommonBuffer`;
+- use the returned device-visible address as the sole xHCI DMA pointer;
+- preserve allocation size/page count and mapping handles for exact teardown;
+- honor required xHCI alignment explicitly;
+- provide 32-bit MMIO reads/writes and use split 32-bit accesses for 64-bit xHCI registers where the proven implementation requires them;
+- keep DMA mappings live until controller references have been eliminated.
+
+This preserves the tested V29/V30/V31 platform contract rather than silently replacing it with the earlier scaffold abstraction.
 
 ## 7. Cumulative controller sequence
 
@@ -178,14 +196,14 @@ V32 must carry forward the proven V29, V30 and V31 machinery rather than creatin
 8. Complete all required UEFI USB discovery reads before controller disconnect.
 9. Call `DisconnectController()` on the selected xHCI controller handle with NULL driver and child handles.
 10. Verify the disconnect succeeds and the UEFI USB controller/bus stack is quiesced.
-11. Re-obtain/validate the PCI I/O access object for the same controller.
+11. Revalidate that the retained PCI I/O access object refers to the same controller.
 12. Enable/verify PCI Memory and Bus Master attributes required for bridge operation.
 13. After this point, the bridge does not use `EFI_USB_IO_PROTOCOL` or UEFI USB timers.
 14. Do not use any UEFI-created xHCI slot ID, device address, command ring, transfer ring, event ring, context, or DMA buffer.
 
 ### Phase B — Controller preparation
 
-15. Bind the corresponding xHCI PCI I/O handle using the handoff controller identity/path.
+15. Bind the xHCI PCI I/O handle using the handoff controller identity/path.
 16. Revalidate PCI controller identity against the handoff and controller handle used for disconnect.
 17. Read/validate the MMIO BAR type and derive its actual base address; accept a valid 32-bit or 64-bit MMIO BAR.
 18. Read/validate HCIVERSION and required capabilities.
@@ -271,7 +289,7 @@ For Gate 6 specifically, the UEFI speed is an expectation/evidence field; the li
 
 The correct pattern is therefore:
 
-`UEFI discovery -> bounded handoff -> bridge-local copy -> UEFI USB-stack quiesce -> fresh xHCI state -> use selected root port -> determine live USB2 speed -> normal xHCI device lifecycle`
+`UEFI discovery -> bounded handoff -> bridge-local copy -> UEFI USB-stack quiesce -> PCI MMIO/bus-master state -> fresh xHCI state -> use selected root port -> determine live USB2 speed -> normal xHCI device lifecycle`
 
 not:
 
@@ -338,6 +356,9 @@ The review must explicitly prove that:
 - the bridge consumes the selected keyboard rather than rediscovering it;
 - UEFI USB ownership is quiesced before bridge MMIO/DMA activity;
 - PCI Memory/Bus Master state is valid before bridge operation and restored after teardown;
+- the bridge platform layer uses the proven UEFI common-buffer DMA contract rather than identity-mapped `AllocatePages()` memory;
+- the bridge does not ignore requested DMA alignment or allocation size;
+- 64-bit xHCI registers are accessed using the project's conservative split-32-bit MMIO method where required;
 - the bridge uses the live post-reset port speed rather than trusting the pre-reset UEFI speed for xHCI context construction;
 - EP0 packet-size data is normalized before xHCI context construction;
 - V32 preserves the cumulative implementation and safety/teardown gates;
