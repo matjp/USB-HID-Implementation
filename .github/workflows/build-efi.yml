@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y gcc binutils file
+        run: sudo apt-get update && sudo apt-get install -y gcc binutils file qemu-system-x86 ovmf mtools xvfb imagemagick
 
       - name: Validate test inputs
         run: |
@@ -121,6 +121,79 @@ jobs:
           objdump -h "build/$TEST_ID/BOOTX64.EFI"
           test -s "build/$TEST_ID/BOOTX64.EFI"
 
+      - name: QEMU UEFI boot verification
+        run: |
+          set -euxo pipefail
+          WORK="build/$TEST_ID/qemu"
+          ESP="$WORK/ESP"
+          QMP="$WORK/qmp.sock"
+          SCREEN="$WORK/qemu-screen.png"
+          SCREEN_AFTER="$WORK/qemu-after-key.png"
+          OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f -name 'OVMF_CODE*.fd' -print -quit 2>/dev/null || true)"
+          OVMF_VARS="$(find /usr/share/OVMF /usr/share/edk2* -type f -name 'OVMF_VARS*.fd' -print -quit 2>/dev/null || true)"
+          test -n "$OVMF_CODE"; test -n "$OVMF_VARS"
+          mkdir -p "$ESP/EFI/BOOT"
+          cp "build/$TEST_ID/BOOTX64.EFI" "$ESP/EFI/BOOT/BOOTX64.EFI"
+          cp "$OVMF_VARS" "$WORK/OVMF_VARS.fd"
+
+          cat > "$WORK/qmp.py" <<'PY'
+          import json, socket, sys, time
+          sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          deadline = time.time() + 8
+          while True:
+              try:
+                  sock.connect(sys.argv[1])
+                  break
+              except OSError:
+                  if time.time() >= deadline:
+                      raise
+                  time.sleep(0.1)
+          sock.recv(4096)
+          def cmd(obj):
+              sock.sendall((json.dumps(obj) + "\r\n").encode())
+              return sock.recv(4096)
+          cmd({"execute":"qmp_capabilities"})
+          cmd({"execute":"human-monitor-command", "arguments":{"command-line":"sendkey ret"}})
+          time.sleep(1)
+          cmd({"execute":"quit"})
+          sock.close()
+          PY
+
+          Xvfb :99 -screen 0 1024x768x24 >/tmp/xvfb.log 2>&1 &
+          XVFB_PID=$!
+          trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
+          export DISPLAY=:99
+
+          qemu-system-x86_64 \
+            -machine q35 \
+            -m 512M \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+            -drive if=pflash,format=raw,file="$WORK/OVMF_VARS.fd" \
+            -drive file=fat:rw:"$ESP",format=raw \
+            -device qemu-xhci,id=xhci \
+            -device usb-kbd,bus=xhci.0 \
+            -display gtk \
+            -qmp "unix:$QMP,server=on,wait=off" \
+            -no-reboot -no-shutdown >/tmp/qemu.log 2>&1 &
+          QEMU_PID=$!
+
+          for _ in $(seq 1 80); do
+            if [ -S "$QMP" ]; then break; fi
+            sleep 0.1
+          done
+          sleep 5
+          import -display "$DISPLAY" -window root "$SCREEN"
+          test -s "$SCREEN"
+
+          python3 "$WORK/qmp.py" "$QMP"
+          sleep 1
+          import -display "$DISPLAY" -window root "$SCREEN_AFTER"
+          test -s "$SCREEN_AFTER"
+
+          wait "$QEMU_PID" || true
+          cp /tmp/qemu.log "$WORK/qemu.log" || true
+          cp /tmp/xvfb.log "$WORK/xvfb.log" || true
+
       - name: Prepare artifact
         run: |
           set -euxo pipefail
@@ -128,8 +201,13 @@ jobs:
           cp "build/$TEST_ID/BOOTX64.EFI" "artifact/EFI-$TEST_ID/BOOTX64.EFI"
           cp "build/$TEST_ID/BUILD-PROVENANCE.txt" "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
           cp "$SOURCE" "artifact/EFI-$TEST_ID/$TEST_ID.c"
+          cp "build/$TEST_ID/qemu/qemu-screen.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
+          cp "build/$TEST_ID/qemu/qemu-after-key.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-AFTER-KEY.png"
+          cp "build/$TEST_ID/qemu/qemu.log" "artifact/EFI-$TEST_ID/QEMU.log"
           test -s "artifact/EFI-$TEST_ID/BOOTX64.EFI"
           test -s "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
+          test -s "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
+          test -s "artifact/EFI-$TEST_ID/QEMU-SCREEN-AFTER-KEY.png"
 
       - uses: actions/upload-artifact@v4
         with:
