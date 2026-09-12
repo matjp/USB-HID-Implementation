@@ -93,9 +93,11 @@ The bridge receives a bridge-local copy of the selected device facts before any 
 
 The handoff's EP0 maximum packet-size field must be normalized to the actual packet size required by the xHCI Endpoint 0 Context. A raw USB descriptor encoding must not be copied blindly into the xHCI context.
 
+The UEFI producer should also identify the PCI controller path associated with the selected USB device. The bridge may enumerate PCI xHCI controllers, but it must bind to the controller identified by the handoff rather than selecting the first matching xHCI controller. No fixed machine-specific BDF is allowed.
+
 The cumulative V32 sequence is:
 
-`UEFI discovery -> handoff validation/normalization -> halt -> reset -> CNR clear -> validate caps -> allocate/map DMA -> program CONFIG/DCBAAP/CRCR/primary event ring -> start xHCI -> verify HCH=0 -> select handoff root port -> verify connected -> port reset -> consume/validate port-status change -> Enable Slot -> completion -> allocate/initialize fresh device contexts -> DCBAA[slot] -> Address Device -> completion -> validate addressed/default state -> halt/reset -> clear controller pointers -> release DMA`
+`UEFI discovery -> handoff validation/normalization -> halt -> reset -> CNR clear -> validate caps -> bind corresponding xHCI controller -> allocate/map DMA -> program CONFIG/DCBAAP/CRCR/primary event ring -> start xHCI -> verify HCH=0 -> select handoff root port -> verify connected -> port reset -> consume/validate port-status change -> Enable Slot -> completion -> allocate/initialize fresh device contexts -> DCBAA[slot] -> Address Device -> completion -> validate addressed/default state -> halt/reset -> clear controller pointers -> release DMA`
 
 This first cumulative V32 stops after Address Device. Descriptors, SET_CONFIGURATION, Configure Endpoint, HID Set Protocol, keyboard reports, mouse traffic, hubs, hot-plug, MSI/MSI-X, CPU interrupt handlers, and continuous report polling remain later work.
 
@@ -104,27 +106,29 @@ This first cumulative V32 stops after Address Device. Descriptors, SET_CONFIGURA
 Before V32 is committed, review the implementation against the xHCI specification, USB HID/USB control-transfer requirements, coreboot/libpayload, Linux xhci-hcd, and UEFI/GNU-EFI. Specifically check:
 
 1. **Cumulative reuse:** V32 must contain the proven V29 halt/reset/DMA/ring initialization, V30 RUN/halt/recovery, and V31 Enable Slot/event-ring completion behavior rather than reimplementing isolated substitutes.
-2. **UEFI boundary:** discovery occurs in the producer stage before active xHCI reconfiguration; the producer identifies the selected keyboard interface and root port; the bridge consumes that record without scanning `EFI_USB_IO_PROTOCOL` itself. Do not hard-code port 4.
-3. **Handoff contract:** magic/version/size/bounds are validated; required fields are usable; the selected keyboard is unambiguous; EP0 packet size is normalized before context construction; optional unavailable fields are not guessed.
-4. **Port reset/state:** correct PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
-5. **Slot/context:** context-size selection from HCCPARAMS1, 64-byte/32-byte context layout as applicable, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
-6. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, normalized Max Packet Size 0, Transfer Ring Dequeue Pointer, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
-7. **DMA:** all contexts, rings, and controller-referenced buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared.
-8. **Failure safety:** after any command submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
-9. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout V32; poll the event ring directly as in V31.
-10. **No UEFI runtime-state reuse:** the bridge starts with a fresh controller state and does not depend on UEFI slot IDs, rings, contexts, DMA buffers, or run state.
+2. **UEFI boundary:** discovery occurs in the producer stage before active xHCI reconfiguration; the producer identifies the selected keyboard interface, root port, and controller path; the bridge consumes that record without scanning `EFI_USB_IO_PROTOCOL` itself. Do not hard-code port 4 or a machine-specific PCI BDF.
+3. **Handoff contract:** magic/version/size/bounds are validated; required fields are usable; the selected keyboard is unambiguous; controller identity is present and matchable; EP0 packet size is normalized before context construction; optional unavailable fields are not guessed.
+4. **Controller binding:** PCI discovery is retained for portability, but the selected controller is constrained by the UEFI handoff's controller identity/path. Multiple matching xHCI controllers must not cause an arbitrary first-match selection.
+5. **Port reset/state:** correct PORTSC reset sequencing, change-bit handling, reset completion detection, and avoidance of unintended writes to unrelated PORTSC bits.
+6. **Slot/context:** context-size selection from HCCPARAMS1, 64-byte/32-byte context layout as applicable, alignment, DCBAA slot indexing, scratchpad/DCBAA lifetime, and Input Control Context fields.
+7. **Address Device:** correct Input Slot/EP0 contexts, Route String/Root Hub Port/Speed fields, normalized Max Packet Size 0, Transfer Ring Dequeue Pointer, and command completion handling. Do not reuse the V31 Slot ID after reset; the slot is per-run state.
+8. **DMA:** all contexts, rings, and controller-referenced buffers use UEFI common-buffer mapping and device-visible addresses. Mappings remain live until controller halt/reset and all references are cleared.
+9. **Failure safety:** after any command submission, if the controller cannot be confirmed halted, do not free DMA mappings; enter the existing non-returning fatal recovery path or an equally conservative recovery path.
+10. **Interrupt isolation:** keep CPU interrupt delivery disabled throughout V32; poll the event ring directly as in V31.
+11. **No UEFI runtime-state reuse:** the bridge starts with a fresh controller state and does not depend on UEFI slot IDs, rings, contexts, DMA buffers, or run state.
 
 ### Gate 6 acceptance criteria
 
 - V32 output proves the UEFI producer selected the actual keyboard interface before active xHCI reconfiguration.
 - The selected keyboard facts were copied into bridge-local state and consumed directly.
+- The selected controller binding came from the handoff rather than first-match PCI enumeration.
 - No bridge-side keyboard-discovery scan was used.
 - The discovered root port is connected when the controller is started.
 - Port reset completes cleanly and the corresponding port-status change is consumed/validated.
 - Enable Slot completion returns a valid fresh Slot ID.
 - Fresh device contexts are allocated and linked through the DCBAA.
 - Address Device completes successfully and the output device context reaches the expected addressed/default state.
-- No hard-coded target port is used.
+- No hard-coded target port or PCI BDF is used.
 - No mouse traffic, descriptor transfers, endpoint configuration, HID protocol change, hubs, hot-plug, CPU interrupts, MSI/MSI-X, or continuous report polling is introduced.
 - On every error path, DMA mappings remain live until controller references are safely eliminated.
 - The controller can be halted/reset and all controller pointers cleared before DMA release.
