@@ -136,7 +136,7 @@ jobs:
           truncate -s 64M "$DISK"
           mkfs.vfat -F 32 "$DISK"
           MTOOLSRC="$WORK/mtools.conf"
-          printf 'drive v: file=%s\n' "$DISK" > "$MTOOLSRC"
+          printf 'drive v: file="%s"\n' "$DISK" > "$MTOOLSRC"
           export MTOOLSRC
           mmd v:/EFI v:/EFI/BOOT
           mcopy -o "build/$TEST_ID/BOOTX64.EFI" v:/EFI/BOOT/BOOTX64.EFI
