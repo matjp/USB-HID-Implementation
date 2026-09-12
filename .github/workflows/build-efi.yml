@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y gcc binutils file qemu-system-x86 ovmf mtools xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y gcc binutils file qemu-system-x86 ovmf mtools imagemagick
 
       - name: Validate test inputs
         run: |
@@ -127,11 +127,16 @@ jobs:
           WORK="build/$TEST_ID/qemu"
           DISK="$WORK/ESP.img"
           QMP="$WORK/qmp.sock"
+          SCREEN_PPM="$WORK/qemu-screen.ppm"
+          SCREEN_AFTER_PPM="$WORK/qemu-after-key.ppm"
           SCREEN="$WORK/qemu-screen.png"
           SCREEN_AFTER="$WORK/qemu-after-key.png"
+          QEMU_LOG="$WORK/qemu.log"
+          QEMU_PIDFILE="$WORK/qemu.pid"
           OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f \( -name 'OVMF_CODE_4M.fd' -o -name 'OVMF_CODE.4m.fd' -o -name 'OVMF_CODE.fd' \) -print -quit 2>/dev/null || true)"
           test -n "$OVMF_CODE"
           mkdir -p "$WORK"
+          rm -f "$QMP" "$SCREEN_PPM" "$SCREEN_AFTER_PPM" "$SCREEN" "$SCREEN_AFTER" "$QEMU_LOG"
 
           truncate -s 64M "$DISK"
           mkfs.vfat -F 32 "$DISK"
@@ -144,31 +149,30 @@ jobs:
 
           cat > "$WORK/qmp.py" <<'PY'
           import json, socket, sys, time
+          path = sys.argv[1]
           sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
           deadline = time.time() + 8
           while True:
               try:
-                  sock.connect(sys.argv[1])
+                  sock.connect(path)
                   break
               except OSError:
                   if time.time() >= deadline:
                       raise
                   time.sleep(0.1)
+          sock.settimeout(5)
           sock.recv(4096)
           def cmd(obj):
               sock.sendall((json.dumps(obj) + "\r\n").encode())
               return sock.recv(4096)
           cmd({"execute":"qmp_capabilities"})
+          cmd({"execute":"human-monitor-command", "arguments":{"command-line":f"screendump {sys.argv[2]}"}})
           cmd({"execute":"human-monitor-command", "arguments":{"command-line":"sendkey ret"}})
           time.sleep(1)
+          cmd({"execute":"human-monitor-command", "arguments":{"command-line":f"screendump {sys.argv[3]}"}})
           cmd({"execute":"quit"})
           sock.close()
           PY
-
-          Xvfb :99 -screen 0 1024x768x24 >/tmp/xvfb.log 2>&1 &
-          XVFB_PID=$!
-          trap 'kill "$XVFB_PID" 2>/dev/null || true' EXIT
-          export DISPLAY=:99
 
           qemu-system-x86_64 \
             -machine q35 \
@@ -177,10 +181,11 @@ jobs:
             -drive file="$DISK",format=raw,if=ide \
             -device qemu-xhci,id=xhci \
             -device usb-kbd,bus=xhci.0 \
-            -display gtk \
+            -display none \
             -qmp "unix:$QMP,server=on,wait=off" \
-            -no-reboot -no-shutdown >/tmp/qemu.log 2>&1 &
+            -no-reboot -no-shutdown >"$QEMU_LOG" 2>&1 &
           QEMU_PID=$!
+          printf '%s\n' "$QEMU_PID" > "$QEMU_PIDFILE"
 
           for _ in $(seq 1 80); do
             if [ -S "$QMP" ]; then break; fi
@@ -188,36 +193,42 @@ jobs:
           done
           test -S "$QMP"
           sleep 5
-          import -display "$DISPLAY" -window root "$SCREEN"
-          test -s "$SCREEN"
 
-          python3 "$WORK/qmp.py" "$QMP"
-          sleep 1
-          import -display "$DISPLAY" -window root "$SCREEN_AFTER"
+          if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+            echo "ERROR: QEMU exited before QMP interaction." >&2
+            cat "$QEMU_LOG" >&2 || true
+            exit 1
+          fi
+
+          python3 "$WORK/qmp.py" "$QMP" "$SCREEN_PPM" "$SCREEN_AFTER_PPM"
+          test -s "$SCREEN_PPM"
+          test -s "$SCREEN_AFTER_PPM"
+          convert "$SCREEN_PPM" "$SCREEN"
+          convert "$SCREEN_AFTER_PPM" "$SCREEN_AFTER"
+          test -s "$SCREEN"
           test -s "$SCREEN_AFTER"
 
           wait "$QEMU_PID" || true
-          cp /tmp/qemu.log "$WORK/qemu.log" || true
-          cp /tmp/xvfb.log "$WORK/xvfb.log" || true
 
       - name: Prepare artifact
+        if: ${{ always() }}
         run: |
           set -euxo pipefail
-          mkdir -p "artifact/EFI-$TEST_ID"
-          cp "build/$TEST_ID/BOOTX64.EFI" "artifact/EFI-$TEST_ID/BOOTX64.EFI"
-          cp "build/$TEST_ID/BUILD-PROVENANCE.txt" "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
-          cp "$SOURCE" "artifact/EFI-$TEST_ID/$TEST_ID.c"
-          cp "build/$TEST_ID/qemu/qemu-screen.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
-          cp "build/$TEST_ID/qemu/qemu-after-key.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-AFTER-KEY.png"
-          cp "build/$TEST_ID/qemu/qemu.log" "artifact/EFI-$TEST_ID/QEMU.log"
-          cp "build/$TEST_ID/qemu/ESP.img" "artifact/EFI-$TEST_ID/QEMU-ESP.img"
-          cp "build/$TEST_ID/qemu/xvfb.log" "artifact/EFI-$TEST_ID/XVFB.log" || true
-          test -s "artifact/EFI-$TEST_ID/BOOTX64.EFI"
-          test -s "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
-          test -s "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
-          test -s "artifact/EFI-$TEST_ID/QEMU-SCREEN-AFTER-KEY.png"
+          OUT="artifact/EFI-$TEST_ID"
+          mkdir -p "$OUT"
+          copy_if_present() { test -s "$1" && cp "$1" "$2" || true; }
+          copy_if_present "build/$TEST_ID/BOOTX64.EFI" "$OUT/BOOTX64.EFI"
+          copy_if_present "build/$TEST_ID/BUILD-PROVENANCE.txt" "$OUT/BUILD-PROVENANCE.txt"
+          copy_if_present "$SOURCE" "$OUT/$TEST_ID.c"
+          copy_if_present "build/$TEST_ID/qemu/qemu-screen.png" "$OUT/QEMU-SCREEN-BEFORE-KEY.png"
+          copy_if_present "build/$TEST_ID/qemu/qemu-after-key.png" "$OUT/QEMU-SCREEN-AFTER-KEY.png"
+          copy_if_present "build/$TEST_ID/qemu/qemu.log" "$OUT/QEMU.log"
+          copy_if_present "build/$TEST_ID/qemu/ESP.img" "$OUT/QEMU-ESP.img"
+          test -s "$OUT/BOOTX64.EFI"
+          test -s "$OUT/BUILD-PROVENANCE.txt"
 
       - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
           name: EFI-${{ env.TEST_ID }}
           path: artifact/EFI-${{ env.TEST_ID }}
