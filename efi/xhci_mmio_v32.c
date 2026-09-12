@@ -26,8 +26,8 @@
                                      V32_PORTSC_PLS_MASK | V32_PORTSC_PP | \
                                      V32_PORTSC_PIC_MASK | V32_PORTSC_LWS | \
                                      V32_PORTSC_WCE | V32_PORTSC_WDE | V32_PORTSC_WOE)
-#define V32_USB_SPEED_LOW           1U
-#define V32_USB_SPEED_FULL          2U
+#define V32_USB_SPEED_FULL          1U
+#define V32_USB_SPEED_LOW           2U
 #define V32_HANDOFF_MAGIC           0x48494458U
 #define V32_HANDOFF_VERSION         1U
 #define V32_MAX_ENDPOINTS           8U
@@ -621,6 +621,21 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     }
     s = v32_portsc_write(p, portsc_off, status, V32_PORTSC_PR, 0, 0, &writes);
     if (EFI_ERROR(s)) goto out;
+    {
+        UINT32 after_reset = 0;
+        s = mr32(p, portsc_off, &after_reset); ++reads;
+        if (EFI_ERROR(s)) goto out;
+        Print(u"RESET OBSERVE: PR=%u PRC=%u PED=%u PLS=%u SPEED=%u\r\n",
+              (after_reset & V32_PORTSC_PR) ? 1U : 0U,
+              (after_reset & V32_PORTSC_PRC) ? 1U : 0U,
+              (after_reset & V32_PORTSC_PED) ? 1U : 0U,
+              (after_reset & V32_PORTSC_PLS_MASK) >> 5,
+              (after_reset & V32_PORTSC_SPEED_MASK) >> V32_PORTSC_SPEED_SHIFT);
+        {
+            volatile UINT32 *ev = (volatile UINT32 *)ev_d.host;
+            Print(u"EVENT[0]: %08x %08x %08x %08x\r\n", ev[0], ev[1], ev[2], ev[3]);
+        }
+    }
     Print(u"PORT RESET: ASSERTED / WAITING\r\n");
     s = v32_wait_event(p, ir + 0x18U, &ev_d, V32_TRB_PORT_STATUS_CHANGE,
                        xhci_port, 0, 0, NULL,
