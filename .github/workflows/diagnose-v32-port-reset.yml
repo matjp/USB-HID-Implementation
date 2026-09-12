@@ -16,6 +16,8 @@ jobs:
       - name: Patch temporary V32 diagnostics
         run: |
           set -euxo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           python3 - <<'PY'
           from pathlib import Path
           p = Path('efi/xhci_mmio_v32.c')
@@ -34,15 +36,18 @@ jobs:
           git diff --check
           git add efi/xhci_mmio_v32.c
           git commit -m "Diagnose V32 port reset event delivery"
+          git push
       - name: Verify project boundary
         run: |
           set -euxo pipefail
-          ! grep -q 'LibLocateHandle(ByProtocol, &V32_UsbIoGuid' efi/xhci_mmio_v32.c || true
           grep -q 'static EFI_STATUS v32_produce_handoff' efi/xhci_mmio_v32.c
           grep -q 'RESET OBSERVE:' efi/xhci_mmio_v32.c
+          test "$(grep -c 'LibLocateHandle(ByProtocol, &V32_UsbIoGuid' efi/xhci_mmio_v32.c || true)" = 1
       - name: Remove helper
         run: |
           set -euxo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/workflows/diagnose-v32-port-reset.yml
           git add .github/workflows/diagnose-v32-port-reset.yml
           git commit -m "Remove temporary V32 diagnostic workflow"
