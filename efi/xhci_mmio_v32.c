@@ -717,7 +717,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     {
         UINTN stride = ((hcc >> 2) & 1U) ? 64U : 32U;
         UINT32 *out_slot = (UINT32 *)output_d.host;
-        UINT32 d3 = out_slot[(stride / 4U) * 3U];
+        UINT32 d3 = out_slot[3];
         UINT32 state = (d3 >> 27) & 0x1fU;
         UINT32 addr = d3 & 0xffU;
         if (state != 2U || addr == 0U) {
