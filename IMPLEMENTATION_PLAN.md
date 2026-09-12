@@ -89,7 +89,7 @@ The Gate 6 EFI image has two explicit logical stages:
 
 `UEFI discovery producer -> bounded handoff -> UEFI USB-stack quiesce -> V32 bridge consumer -> fresh xHCI state`
 
-The UEFI discovery producer is authoritative and may use `EFI_USB_IO_PROTOCOL` and USB device paths to select the keyboard and populate the handoff. Before any active xHCI MMIO reconfiguration, the producer must stop the UEFI USB host-controller/bus-driver stack for the selected xHCI controller using `DisconnectController()` recursively. The V32 bridge consumer then consumes the bounded handoff without enumerating `EFI_USB_IO_PROTOCOL` handles or performing a second keyboard-discovery algorithm.
+The UEFI discovery producer is authoritative and may use `EFI_USB_IO_PROTOCOL` and USB device paths to select the keyboard and populate the handoff. Before any active xHCI MMIO reconfiguration, the producer must stop the UEFI USB host-controller/bus-driver stack for the selected xHCI controller using `DisconnectController()`. The V32 bridge consumer then consumes the bounded handoff without enumerating `EFI_USB_IO_PROTOCOL` handles or performing a second keyboard-discovery algorithm.
 
 The bridge receives a bridge-local copy of the selected device facts before active xHCI reconfiguration. The handoff never transfers UEFI-created rings, contexts, DMA buffers, slot IDs, device addresses, or controller run state. The bridge creates fresh xHCI state itself.
 
@@ -111,7 +111,7 @@ Before V32 is committed, review the implementation against the xHCI specificatio
 
 1. **Cumulative reuse:** V32 must contain the proven V29 halt/reset/DMA/ring initialization, V30 RUN/halt/recovery, and V31 Enable Slot/event-ring completion behavior rather than reimplementing isolated substitutes.
 2. **UEFI boundary:** discovery occurs in the producer stage before active xHCI reconfiguration; the producer identifies the selected keyboard interface, root port, and controller path; the bridge consumes that record without scanning `EFI_USB_IO_PROTOCOL` itself. Do not hard-code port 4 or a machine-specific PCI BDF.
-3. **Ownership handoff:** all UEFI USB discovery reads complete before `DisconnectController()`; the selected controller is recursively disconnected; the disconnect succeeds; no active xHCI MMIO/DMA reconfiguration occurs before successful quiesce.
+3. **Ownership handoff:** all UEFI USB discovery reads complete before `DisconnectController()`; the selected controller is disconnected with `DriverImageHandle=NULL` and `ChildHandle=NULL`; the disconnect succeeds; no active xHCI MMIO/DMA reconfiguration occurs before successful quiesce.
 4. **Handoff contract:** magic/version/size/bounds are validated; required fields are usable; the selected keyboard is unambiguous; controller identity is present and matchable; EP0 packet size is normalized before context construction; optional unavailable fields are not guessed.
 5. **Controller binding:** the controller handle used for UEFI disconnect and the PCI I/O handle used by the bridge refer to the same controller; multiple matching xHCI controllers do not cause arbitrary first-match selection.
 6. **Port protocol/speed:** the selected port's live PORTSC state is authoritative after controller start. Gate 6 accepts Low Speed or Full Speed only. High-Speed and SuperSpeed are rejected rather than introducing a second general-speed or USB3 reset path.
