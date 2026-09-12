@@ -129,7 +129,7 @@ jobs:
           QMP="$WORK/qmp.sock"
           SCREEN="$WORK/qemu-screen.png"
           SCREEN_AFTER="$WORK/qemu-after-key.png"
-          OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f \( -name 'OVMF_CODE.4m.fd' -o -name 'OVMF_CODE.fd' \) -print -quit 2>/dev/null || true)"
+          OVMF_CODE="$(find /usr/share/OVMF /usr/share/edk2* -type f \( -name 'OVMF_CODE_4M.fd' -o -name 'OVMF_CODE.4m.fd' -o -name 'OVMF_CODE.fd' \) -print -quit 2>/dev/null || true)"
           test -n "$OVMF_CODE"
           mkdir -p "$WORK"
 
@@ -186,6 +186,7 @@ jobs:
             if [ -S "$QMP" ]; then break; fi
             sleep 0.1
           done
+          test -S "$QMP"
           sleep 5
           import -display "$DISPLAY" -window root "$SCREEN"
           test -s "$SCREEN"
@@ -210,6 +211,7 @@ jobs:
           cp "build/$TEST_ID/qemu/qemu-after-key.png" "artifact/EFI-$TEST_ID/QEMU-SCREEN-AFTER-KEY.png"
           cp "build/$TEST_ID/qemu/qemu.log" "artifact/EFI-$TEST_ID/QEMU.log"
           cp "build/$TEST_ID/qemu/ESP.img" "artifact/EFI-$TEST_ID/QEMU-ESP.img"
+          cp "build/$TEST_ID/qemu/xvfb.log" "artifact/EFI-$TEST_ID/XVFB.log" || true
           test -s "artifact/EFI-$TEST_ID/BOOTX64.EFI"
           test -s "artifact/EFI-$TEST_ID/BUILD-PROVENANCE.txt"
           test -s "artifact/EFI-$TEST_ID/QEMU-SCREEN-BEFORE-KEY.png"
