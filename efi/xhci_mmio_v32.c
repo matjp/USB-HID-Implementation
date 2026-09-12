@@ -101,6 +101,7 @@ static UINT8 v32_root_port(EFI_DEVICE_PATH_PROTOCOL *path, UINT8 *usb_nodes)
         if (h->Type == 0x03U && h->SubType == 0x05U && len >= 6U) {
             root = p[4];
             ++count;
+            Print(u"DP USB NODE: PORT=%u IF=%u\r\n", p[4], p[5]);
         }
         p += len;
     }
@@ -190,6 +191,10 @@ static EFI_STATUS v32_discover(EFI_HANDLE image, V32_HANDOFF *h,
             return s;
         }
         root = v32_root_port(path, &nodes);
+        Print(u"DP ROOT=%u USB-NODES=%u FIRST-TYPE=%02x FIRST-SUB=%02x FIRST-LEN=%u\r\n",
+              root, nodes, path ? ((UINT8 *)path)[0] : 0,
+              path ? ((UINT8 *)path)[1] : 0,
+              path ? (UINT16)((UINT8 *)path)[2] | ((UINT16)((UINT8 *)path)[3] << 8) : 0);
         if (nodes != 1U) {
             s = EFI_UNSUPPORTED;
             v32_fail(u"DISCOVERY", u"DIRECT ROOT PORT", s);
@@ -598,17 +603,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     halted = FALSE; running = TRUE;
     s = wait_hch(p, op, FALSE, 10000U, &status, &reads); if (EFI_ERROR(s)) goto out;
 
+    if (b.keyboard.root_port == 0xffU) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"ROOT PORT NUMBER", s); goto out; }
+    xhci_port = (UINT8)(b.keyboard.root_port + 1U);
+    s = v32_supported_protocol(p, hcc, xhci_port, &proto_major, &proto_minor, &slot_type, &reads); if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
     portsc_off = op + 0x400U + ((UINT32)xhci_port - 1U) * 0x10U;
     s = mr32(p, portsc_off, &status); ++reads; if (EFI_ERROR(s)) goto out;
     if (!(status & V32_PORTSC_CCS)) { s = EFI_NOT_FOUND; v32_fail(u"PORT", u"NOT CONNECTED", s); goto out; }
     speed = (UINT8)((status & V32_PORTSC_SPEED_MASK) >> V32_PORTSC_SPEED_SHIFT);
     if (speed != V32_USB_SPEED_LOW && speed != V32_USB_SPEED_FULL) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"LS/FS ONLY", s); goto out; }
-    if (b.keyboard.root_port == 0xffU) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"ROOT PORT NUMBER", s); goto out; }
-    xhci_port = (UINT8)(b.keyboard.root_port + 1U);
-    s = v32_supported_protocol(p, hcc, xhci_port, &proto_major, &proto_minor, &slot_type, &reads); if (EFI_ERROR(s)) { v32_fail(u"PORT", u"SUPPORTED PROTOCOL", s); goto out; }
     if (proto_major != 2U) { s = EFI_UNSUPPORTED; v32_fail(u"PORT", u"USB2 PROTOCOL", s); goto out; }
-    Print(u"PORT=%u CONNECTED SPEED=%u PROTOCOL=%u.%u SLOT-TYPE=%u\r\n",
-          b.keyboard.root_port, speed, proto_major, proto_minor, slot_type);
+    Print(u"PORT: UEFI=%u XHCI=%u CONNECTED SPEED=%u PROTOCOL=%u.%u SLOT-TYPE=%u\r\n",
+          b.keyboard.root_port, xhci_port, speed, proto_major, proto_minor, slot_type);
 
     if (status & V32_PORTSC_PRC) {
         s = v32_portsc_write(p, portsc_off, status, 0, V32_PORTSC_PR,
