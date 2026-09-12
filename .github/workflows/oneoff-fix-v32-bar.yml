@@ -1,0 +1,36 @@
+name: One-off V32 BAR fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply V32 BAR fix and remove this workflow
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('efi/xhci_mmio_v32.c')
+          s = p.read_text()
+          old = 'if((bar0&1U)||(((bar0>>1)&3U)==1U)||!(bar0&0xfffffff0U)){s=EFI_UNSUPPORTED;fail(u"PCI",u"MMIO BAR",s);goto out;}bar64=(UINT64)(bar0&0xfffffff0U);if(((bar0>>1)&3U)==2U)bar64|=((UINT64)bar1<<32);if(!bar64){s=EFI_DEVICE_ERROR;fail(u"PCI",u"MMIO BAR ZERO",s);goto out;}'
+          new = 'bar64=(UINT64)(bar0&0xfffffff0U);if(((bar0>>1)&3U)==2U)bar64|=((UINT64)bar1<<32);'
+          if old not in s:
+              raise SystemExit('expected V32 BAR validation block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          rm .github/workflows/oneoff-fix-v32-bar.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add efi/xhci_mmio_v32.c .github/workflows/oneoff-fix-v32-bar.yml
+          git diff --cached --check
+          git commit -m 'Fix V32 PCI BAR validation after UEFI handoff'
+          git push
