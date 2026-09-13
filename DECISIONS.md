@@ -56,7 +56,7 @@ The first command-ring test uses exactly one Enable Slot command and polls the p
 
 ## D014 — Gate 6 uses an authoritative UEFI-selected keyboard
 
-Gate 6 begins with a UEFI discovery producer selecting one in-scope HID boot keyboard before active xHCI reconfiguration. The selected keyboard record is authoritative as the discovery result: the bridge consumes that record and does not perform a second `EFI_USB_IO_PROTOCOL` keyboard-discovery scan. The physical device may be a composite receiver, including a combined wireless keyboard/mouse dongle. The bridge must still perform normal port-state/reset, Enable Slot, Address Device, and subsequent device setup. Mouse traffic remains out of scope until keyboard bring-up is stable.
+Gate 6 begins with a UEFI discovery producer selecting one in-scope HID boot keyboard before active xHCI reconfiguration. The selected keyboard record is authoritative as the discovery result: the bridge consumes that record and does not perform a second EFI_USB_IO_PROTOCOL keyboard-discovery scan. The physical device may be a composite receiver, including a combined wireless keyboard/mouse dongle. The bridge must still perform normal port-state/reset, Enable Slot, Address Device, and subsequent device setup. Mouse traffic remains out of scope until keyboard bring-up is stable.
 
 ## D015 — Keep Gate 6 command scope incremental
 
@@ -70,11 +70,11 @@ The first Gate 6 implementation continues the V31 polling model. Command and tra
 
 Each numbered test version must build on the latest proven implementation and carry forward all applicable previously passed gates. A new version may add or tighten one new gate, but it must not replace, bypass, or independently reimplement previously proven controller lifecycle, DMA, discovery, ring, completion, safety, or teardown behavior. Gate 6 is cumulative in functionality, but its USB discovery and xHCI bridge stages are explicitly separated within the test image.
 
-The required progression is therefore cumulative: **V28 UEFI discovery -> V29 halted initialization -> V30 controller run/halt/recovery -> V31 Enable Slot/completion -> new V32 authoritative handoff consumer + all prior gates + Port Reset/Address Device -> later versions extend the same implementation.** A gate result only proves the cumulative implementation represented by that version; isolated replacement tests do not count as progression of the implementation.
+The required progression is therefore cumulative: **V28 UEFI discovery -> V29 halted initialization -> V30 controller run/halt/recovery -> V31 Enable Slot/completion -> V32 authoritative handoff consumer + all prior gates + Port Reset/Address Device -> later versions extend the same implementation.** A gate result only proves the cumulative implementation represented by that version; isolated replacement tests do not count as progression of the implementation.
 
 ## D018 — Gate 6 handoff transport is in-memory for the EFI experiment
 
-The Gate 6 test image contains two logical stages: a UEFI discovery producer and a V32 bridge consumer. The producer constructs a bounded versioned handoff in memory and passes it directly to the bridge consumer. The bridge copies the selected device facts into bridge-local state before active xHCI reconfiguration and then operates without enumerating `EFI_USB_IO_PROTOCOL` handles.
+The Gate 6 test image contains two logical stages: a UEFI discovery producer and a V32 bridge consumer. The producer constructs a bounded versioned handoff in memory and passes it directly to the bridge consumer. The bridge copies the selected device facts into bridge-local state before active xHCI reconfiguration and then operates without enumerating EFI_USB_IO_PROTOCOL handles.
 
 This deliberately avoids introducing a disk file, UEFI variable, firmware NVRAM dependency, or speculative cross-application transport into the hardware experiment. The same logical handoff ABI may later be transported by the boot/OS handoff mechanism when the resident service architecture is implemented; that is a separate design task.
 
@@ -82,7 +82,7 @@ This deliberately avoids introducing a disk file, UEFI variable, firmware NVRAM 
 
 The handoff should identify the PCI controller path associated with the selected USB device sufficiently to bind the bridge to the corresponding xHCI controller. The bridge may discover xHCI controllers through PCI, as required by D002, but it must not simply select the first matching xHCI controller when the UEFI handoff identifies another controller. No machine-specific PCI address is hard-coded.
 
-UEFI PCI device paths define a path through PCI device/function nodes, and `EFI_PCI_IO_PROTOCOL.GetLocation()` can provide the PCI segment, bus, device and function for a controller. These are suitable discovery constraints rather than assumptions about a fixed platform address.
+UEFI PCI device paths define a path through PCI device/function nodes, and EFI_PCI_IO_PROTOCOL.GetLocation() can provide the PCI segment, bus, device and function for a controller. These are suitable discovery constraints rather than assumptions about a fixed platform address.
 
 ## D020 — Gate 6 is limited to USB2-compatible Low/Full Speed HID
 
@@ -92,13 +92,13 @@ The first live-device Gate 6 path deliberately supports only a keyboard whose se
 
 UEFI USB discovery and direct bridge xHCI programming must not operate concurrently against the same controller. After the discovery producer has copied and validated the bounded handoff, Gate 6 must stop the UEFI USB host-controller/bus-driver stack for the selected xHCI controller before the bridge performs any active xHCI MMIO reconfiguration.
 
-The portable mechanism selected for this EFI experiment is the UEFI Driver Model `DisconnectController()` operation on the selected xHCI controller handle, with `DriverImageHandle=NULL` and `ChildHandle=NULL`. This disconnects all drivers managing the controller and destroys all children before they are disconnected. The implementation must verify that the disconnect succeeds before proceeding. After that point the bridge must not use `EFI_USB_IO_PROTOCOL`, UEFI USB timers, or UEFI-created xHCI runtime resources. The bridge then establishes fresh xHCI controller/device state and its own DMA mappings.
+The portable mechanism selected for this EFI experiment is the UEFI Driver Model DisconnectController() operation on the selected xHCI controller handle, with DriverImageHandle=NULL and ChildHandle=NULL. This disconnects all drivers managing the controller and destroys all children before they are disconnected. The implementation must verify that the disconnect succeeds before proceeding. After that point the bridge must not use EFI_USB_IO_PROTOCOL, UEFI USB timers, or UEFI-created xHCI runtime resources. The bridge then establishes fresh xHCI controller/device state and its own DMA mappings.
 
-This is a controller-ownership/quiesce transition, not reuse of UEFI runtime state. The future resident-service architecture requires a separate lifetime/ownership design around `ExitBootServices`; this decision is specifically for the Gate 6 EFI experiment.
+This is a controller-ownership/quiesce transition, not reuse of UEFI runtime state. The future resident-service architecture requires a separate lifetime/ownership design around ExitBootServices; this decision is specifically for the Gate 6 EFI experiment.
 
 ## D022 — Gate 6 uses the xHCI default EP0 packet size for Address Device
 
-For the initial Address Device command, the bridge must use the xHCI-defined speed-dependent default Max Packet Size for EP0. Within Gate 6's Low-/Full-Speed scope this value is 8 bytes. The USB device descriptor's `bMaxPacketSize0` is not substituted into the initial Address Device context. A later gate may read the descriptor and, for a Full-Speed device when the actual value differs, update the EP0 context using the appropriate xHCI mechanism. Gate 6 performs no pre-Address-Device descriptor transfer.
+For the initial Address Device command, the bridge must use the xHCI-defined speed-dependent default Max Packet Size for EP0. Within Gate 6's Low-/Full-Speed scope this value is 8 bytes. The USB device descriptor's bMaxPacketSize0 is not substituted into the initial Address Device context. A later gate may read the descriptor and, for a Full-Speed device when the actual value differs, update the EP0 context using the appropriate xHCI mechanism. Gate 6 performs no pre-Address-Device descriptor transfer.
 
 ## D023 — Enable Slot uses the protocol capability covering the selected port
 
@@ -106,4 +106,36 @@ Gate 6 must locate the Supported Protocol Capability whose Port Offset/Port Coun
 
 ## D024 — Reset completion must be attributable to this reset
 
-Before issuing the USB2 Port Reset operation, Gate 6 must handle any pre-existing reset-change (`PRC`) state so that the later Port Status Change Event and PRC transition can be attributed to the reset issued by V32. The operation must use the PORTSC RW1C semantics for change bits and preserve unrelated state. A stale PRC indication must not be mistaken for successful completion of the new reset.
+Before issuing the USB2 Port Reset operation, Gate 6 must handle any pre-existing reset-change (PRC) state so that the later Port Status Change Event and PRC transition can be attributed to the reset issued by V32. The operation must use the PORTSC RW1C semantics for change bits and preserve unrelated state. A stale PRC indication must not be mistaken for successful completion of the new reset.
+
+## D025 — UEFI resolves exact xHCI MMIO access facts before ownership transfer
+
+The Gate 6 V3 handoff must carry exact BAR-relative xHCI MMIO offsets that UEFI can resolve before `DisconnectController()`, including the operational block, command/status registers, CRCR, DCBAAP, CONFIG, Doorbell 0, runtime/interrupter registers, primary event-ring registers, the selected port's PORTSC offset, and the selected port's protocol Slot Type.
+
+The bridge consumes these resolved offsets directly. It must not reconstruct PORTSC from `root_port`, operational base and fixed port stride, nor rediscover Supported Protocol Capabilities. The handoff uses BAR-relative offsets because EFI_PCI_IO_PROTOCOL.Mem.Read/Write takes a BAR-relative register offset; physical MMIO addresses are not required.
+
+The bridge may still perform generic fixed-register validation that is intrinsic to the xHCI register layout. If the project later adopts a literal zero-arithmetic MMIO policy, those remaining fixed capability offsets will also be handed over explicitly.
+
+## D026 — UEFI performs the only UEFI-port-to-xHCI-port numbering conversion
+
+`EFI_USB_DEVICE_PATH.ParentPortNumber` is zero-based. xHCI root-port numbering used by PORTSC and Slot Context is one-based. The UEFI producer therefore converts the selected device-path port exactly once by adding one when constructing the handoff. The bridge consumes the resulting xHCI root-port value directly and never performs the conversion again.
+
+The conversion is discovery interpretation in UEFI, not bridge-side USB discovery. A nonzero UEFI port must not be treated as zero or conditionally converted only when it is zero.
+
+## D027 — Gate 6 DMA is generically constrained to 32-bit device addresses
+
+Gate 6 must work with xHCI controllers both with and without HCCPARAMS1.AC64. AC64=0 is not itself an unsupported-controller condition. The bridge uses EFI_PCI_IO_PROTOCOL common-buffer DMA mapping and deliberately disables `EFI_PCI_IO_ATTRIBUTE_DUAL_ADDRESS_CYCLE` before controller-referenced DMA allocation when the attribute is active. Every mapped `DeviceAddress` must be explicitly checked to fit within 32 bits.
+
+The 32-bit DMA choice is a portability/safety constraint for this gate, not a Toshiba-specific workaround. Platform DMA remapping remains the responsibility of EFI_PCI_IO_PROTOCOL.
+
+## D028 — CI functional result is part of Gate 6 acceptance
+
+QEMU boot success is not sufficient evidence for V32. The EFI application must reach its result screen and report `RESULT: Success`. The V32 application therefore pauses at `PRESS ANY KEY`; CI waits for the result screen, captures it, sends a key to release the image, and OCR-checks the result. A reported failure must make the workflow fail.
+
+The pause is synchronization only; the EFI application's result remains the functional acceptance criterion.
+
+## D029 — Current V32 PORT/HANDOFF failure is diagnostic until explained
+
+The first CI run using the functional-result gate reported `RESULT: FAIL STAGE=PORT OP=HANDOFF PORT STATUS=Device Error`. This occurs at the handoff root-port bounds check, before PORTSC connection testing, port reset, Enable Slot or Address Device.
+
+No port-number semantic change, bridge-side USB discovery, or hardware test is authorized merely from this failure. The next diagnostic revision must expose the handoff root-port value and the controller-reported maximum port count so the source of the mismatch can be established. The existing one-time UEFI zero-based-to-xHCI one-based conversion remains the design rule unless evidence disproves it.
