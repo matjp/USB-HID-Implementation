@@ -17,6 +17,8 @@ The version-3 handoff supplies these controller-relative MMIO facts:
 - `portsc_offset` — exact PORTSC offset for the UEFI-selected root port.
 - `slot_type` — Slot Type resolved from the Supported Protocol Capability covering the selected root port.
 
+The handoff also supplies the exact offsets needed for CRCR, DCBAAP, CONFIG, USBCMD/USBSTS and the primary event-ring registers used by V32.
+
 The selected keyboard and optional mouse continue to carry their UEFI device-path and HID interface facts.
 
 ## Ownership boundary
@@ -39,6 +41,10 @@ The current EFI bridge uses `EFI_PCI_IO_PROTOCOL.Mem.Read/Write`, whose register
 
 The PCI controller identity/path remains part of the handoff so the bridge can prove that the PCI I/O handle it uses is the controller selected by UEFI.
 
+## Root-port numbering
+
+`EFI_USB_DEVICE_PATH.ParentPortNumber` is zero-based. xHCI root-port numbering used by PORTSC and Slot Context is one-based. The producer converts the selected UEFI device-path value exactly once (`ParentPortNumber + 1`) when constructing the handoff. The bridge consumes the resulting xHCI root-port value directly.
+
 ## What remains bridge-owned
 
 The bridge still creates and owns state that does not exist until the fresh xHCI instance is initialized:
@@ -53,12 +59,20 @@ The bridge still creates and owns state that does not exist until the fresh xHCI
 
 These are runtime state, not UEFI discovery facts, and are intentionally not inherited from UEFI.
 
-## Fixed conversion rule
+## DMA portability rule
 
-UEFI's `EFI_USB_DEVICE_PATH.ParentPortNumber` is zero-based. xHCI root-port numbering used by PORTSC and Slot Context is one-based. The producer therefore converts the UEFI device-path port exactly once when constructing the handoff. The bridge receives the resulting xHCI root-port value and does not perform that conversion again.
+Gate 6 uses EFI_PCI_IO_PROTOCOL as the DMA abstraction boundary and deliberately operates with **32-bit device-visible DMA addresses**. It does not reject a controller merely because HCCPARAMS1.AC64 is clear.
 
-## Gate 6 acceptance evidence
+Before controller-referenced DMA allocation, the bridge disables `EFI_PCI_IO_ATTRIBUTE_DUAL_ADDRESS_CYCLE` when active/supported. Each `Map(...BusMasterCommonBuffer...)` result must have a `DeviceAddress` no greater than `0xffffffff`. The allocation and mapping remain live until xHCI references are cleared.
 
-A successful run must print the V3 handoff facts, including the exact `PORTSC` offset and `SLOT_TYPE`, and then show that the bridge used those supplied values for the live port and command path.
+This is a generic portability constraint, not a Toshiba-specific workaround. The bridge must not assume identity-mapped physical memory or a particular IOMMU/VT-d configuration.
 
-No hardware test is considered a pass merely because the image boots. The functional QEMU run must reach and report the V32 result stage.
+## CI acceptance rule
+
+The EFI image ends with `PRESS ANY KEY` after printing its result. CI waits for the result screen, captures it before sending a key, then releases the EFI image. QEMU boot/process success is not sufficient: CI must fail unless the captured result contains `RESULT: Success`.
+
+The current V32 run reached the result stage but failed at:
+
+`RESULT: FAIL STAGE=PORT OP=HANDOFF PORT STATUS=Device Error`
+
+This is a failure at the handoff root-port bounds check, before live PORTSC connection testing. The next diagnostic revision should print the handoff root-port value and controller maximum-port value before this check. Do not change the port-numbering rule or add bridge discovery until those values are understood.
