@@ -1,78 +1,74 @@
-# Gate 6 Handoff V3 — UEFI-resolved xHCI access facts
+# Gate 6 Handoff V3 — Superseded by V4
 
-## Purpose
+## Status
 
-The Gate 6 architecture is **UEFI discovers; the bridge executes**. The UEFI producer is authoritative for USB discovery and resolves the controller/device information that can be known before ownership is transferred.
+**V3 is retained as historical ABI documentation. The active Gate 6 handoff contract is `HANDOFF_V4.md`.**
 
-The bridge must not reconstruct xHCI addresses from USB discovery facts when UEFI can supply the resolved value.
+The V4 contract strengthens the original V3 rule from “UEFI resolves useful facts” to:
 
-## V3 handoff additions
+> **UEFI hands over the maximum useful resolved xHCI/device configuration state for the selected keyboard and mouse. The bridge creates all live xHCI runtime state afresh and performs no USB discovery.**
 
-The version-3 handoff supplies these controller-relative MMIO facts:
+## V3 historical scope
 
-- `operational_offset` — xHCI operational register block offset from the PCI MMIO BAR used by the EFI PCI I/O access layer.
-- `doorbell_offset` — exact Host Controller Doorbell 0 offset used for command submission.
-- `runtime_offset` — xHCI runtime-register block offset.
-- `interrupter0_offset` — exact primary interrupter-0 register block offset.
-- `portsc_offset` — exact PORTSC offset for the UEFI-selected root port.
-- `slot_type` — Slot Type resolved from the Supported Protocol Capability covering the selected root port.
+V3 introduced UEFI-resolved controller-relative MMIO facts, including:
 
-The handoff also supplies the exact offsets needed for CRCR, DCBAAP, CONFIG, USBCMD/USBSTS and the primary event-ring registers used by V32.
+- `operational_offset`;
+- `usbcmd_offset`;
+- `usbsts_offset`;
+- `crcr_offset`;
+- `dcbaap_offset`;
+- `config_offset`;
+- `doorbell_offset`;
+- `runtime_offset`;
+- `interrupter0_offset`;
+- `iman_offset`;
+- `erstsz_offset`;
+- `erstba_offset`;
+- `erdp_offset`;
+- selected `portsc_offset`;
+- selected `slot_type`.
 
-The selected keyboard and optional mouse continue to carry their UEFI device-path and HID interface facts.
+It also established the one-time UEFI `ParentPortNumber + 1` conversion and the rule that the bridge must not reconstruct `PORTSC` from the root port.
 
-## Ownership boundary
+## V4 correction
 
-All USB discovery, device-path interpretation, root-port conversion, Supported Protocol Capability lookup, and xHCI register-offset resolution happen in the UEFI producer **before** `DisconnectController(controller, NULL, NULL)`.
+The V3 structure is not sufficient as the final two-device ABI because a single controller-wide `portsc_offset` and `slot_type` cannot represent independent keyboard and mouse root-port/protocol facts.
 
-After disconnect, the bridge consumes the copied handoff values. It may validate that immutable controller facts still match the handoff, but it must not rediscover or recompute them.
+V4 therefore makes resolved xHCI access/topology facts **per-device**, while also expanding the controller record to carry maximum useful immutable controller capability facts.
 
-In particular, the bridge must not calculate:
+For each selected keyboard/mouse, UEFI must resolve, where available:
 
-`PORTSC = operational_base + 0x400 + (root_port - 1) * 0x10`
+- complete relevant UEFI USB device path;
+- controller association;
+- xHCI one-based root port;
+- exact BAR-relative `PORTSC` offset;
+- covering Supported Protocol Capability and Slot Type;
+- speed evidence;
+- VID/PID and useful descriptor facts;
+- configuration/interface/HID facts;
+- interrupt-IN endpoint and descriptor facts;
+- other immutable topology/device facts useful to later xHCI setup.
 
-It uses `portsc_offset` supplied by UEFI directly.
+The bridge must not rediscover any of those facts.
 
-Likewise it uses the supplied doorbell/runtime/interrupter offsets directly.
+## Runtime-state boundary remains unchanged
 
-## Why offsets rather than physical addresses?
-
-The current EFI bridge uses `EFI_PCI_IO_PROTOCOL.Mem.Read/Write`, whose register argument is an offset within a PCI memory BAR. Therefore the portable handoff value is the **exact BAR-relative MMIO offset**, not a firmware-specific virtual or physical mapping.
-
-The PCI controller identity/path remains part of the handoff so the bridge can prove that the PCI I/O handle it uses is the controller selected by UEFI.
-
-## Root-port numbering
-
-`EFI_USB_DEVICE_PATH.ParentPortNumber` is zero-based. xHCI root-port numbering used by PORTSC and Slot Context is one-based. The producer converts the selected UEFI device-path value exactly once (`ParentPortNumber + 1`) when constructing the handoff. The bridge consumes the resulting xHCI root-port value directly.
-
-## What remains bridge-owned
-
-The bridge still creates and owns state that does not exist until the fresh xHCI instance is initialized:
+The bridge still creates all live runtime state afresh:
 
 - command/event rings;
 - DCBAA and device contexts;
-- EP0 transfer ring;
-- scratchpad allocations;
-- DMA mappings and device-visible addresses;
-- fresh Slot ID and USB device address;
-- live PORTSC speed after controller start/reset.
+- transfer rings;
+- DMA mappings;
+- Slot IDs;
+- USB device addresses;
+- controller run state.
 
-These are runtime state, not UEFI discovery facts, and are intentionally not inherited from UEFI.
+Mutable live PORTSC state is read by the bridge after fresh controller initialization; UEFI's speed value is evidence, not inherited runtime state.
 
-## DMA portability rule
+## Port-numbering rule remains unchanged
 
-Gate 6 uses EFI_PCI_IO_PROTOCOL as the DMA abstraction boundary and deliberately operates with **32-bit device-visible DMA addresses**. It does not reject a controller merely because HCCPARAMS1.AC64 is clear.
+`EFI_USB_DEVICE_PATH.ParentPortNumber` is zero-based. UEFI performs the only conversion to xHCI's one-based root-port numbering. The bridge performs no second conversion.
 
-Before controller-referenced DMA allocation, the bridge disables `EFI_PCI_IO_ATTRIBUTE_DUAL_ADDRESS_CYCLE` when active/supported. Each `Map(...BusMasterCommonBuffer...)` result must have a `DeviceAddress` no greater than `0xffffffff`. The allocation and mapping remain live until xHCI references are cleared.
+## Gate 6 scope
 
-This is a generic portability constraint, not a Toshiba-specific workaround. The bridge must not assume identity-mapped physical memory or a particular IOMMU/VT-d configuration.
-
-## CI acceptance rule
-
-The EFI image ends with `PRESS ANY KEY` after printing its result. CI waits for the result screen, captures it before sending a key, then releases the EFI image. QEMU boot/process success is not sufficient: CI must fail unless the captured result contains `RESULT: Success`.
-
-The current V32 run reached the result stage but failed at:
-
-`RESULT: FAIL STAGE=PORT OP=HANDOFF PORT STATUS=Device Error`
-
-This is a failure at the handoff root-port bounds check, before live PORTSC connection testing. The next diagnostic revision should print the handoff root-port value and controller maximum-port value before this check. Do not change the port-numbering rule or add bridge discovery until those values are understood.
+The first live test still exercises only the selected keyboard and stops after Address Device. If a mouse is present, its resolved V4 record is carried now, but mouse traffic remains a later gate.
