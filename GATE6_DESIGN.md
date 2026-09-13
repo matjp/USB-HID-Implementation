@@ -1,6 +1,6 @@
 # Gate 6 Design — UEFI-Selected Keyboard to Address Device
 
-Status: **V32 implementation under CI validation; hardware remains blocked until CI and source review pass.**
+Status: **DESIGN RESTARTED. V32 source and obsolete V32 debug workflow have been removed. No V32 implementation is authorized until the design review passes.**
 
 ## 1. Design authority
 
